@@ -8,7 +8,10 @@ bazarr/
 bazarr-4k/
 overseerr/
 tautulli/
-tdarr/
+tdarr/configs/
+tdarr/flows/
+tdarr/logs/
+tdarr/server/
 tdarr-node/
 plex/
 rdtclient/
@@ -39,3 +42,7 @@ aria2-watchdog.sh
 
 # VPN config (may contain credentials)
 *.ovpn
+
+tdarr/bin/dovi_tool
+tdarr/bin/mkvmerge
+tdarr/bin/lib/

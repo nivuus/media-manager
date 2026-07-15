@@ -260,6 +260,7 @@ services:
       - default
     volumes:
       - ./tdarr/configs:/app/configs
+      - ./tdarr/bin:/app/bin:ro
       - ./tdarr/transcode_cache:/temp
       - ${MEDIA_ROOT}:/media
 
