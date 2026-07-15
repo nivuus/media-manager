@@ -12,6 +12,10 @@ tdarr/configs/
 tdarr/flows/
 tdarr/logs/
 tdarr/server/
+tdarr/transcode_cache/
+# tdarr/bin : ignorer les binaires téléchargés, suivre le script
+tdarr/bin/*
+!tdarr/bin/fetch-binaries.sh
 tdarr-node/
 plex/
 rdtclient/
@@ -42,7 +46,3 @@ aria2-watchdog.sh
 
 # VPN config (may contain credentials)
 *.ovpn
-
-tdarr/bin/dovi_tool
-tdarr/bin/mkvmerge
-tdarr/bin/lib/
