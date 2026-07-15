@@ -28,6 +28,9 @@ CPU_ENC = {"outputCodec": "hevc", "ffmpegPresetEnabled": True, "ffmpegPreset": "
            "ffmpegQualityEnabled": True, "ffmpegQuality": "{{args.variables.user.quality}}",
            "hardwareEncoding": False, "hardwareType": "auto", "hardwareDecoding": False,
            "forceEncoding": True}
+# (handle de sortie de checkVideoResolution) -> bucket qualité.
+# Mapping repris de v5 ; les handles 1-9 dépendent de la version de Tdarr,
+# à revérifier dans l'UI si un palier de résolution semble mal routé.
 RES_MAP = [(1,"SD"),(2,"SD"),(3,"720"),(4,"1080"),(5,"1080"),(6,"4K"),(7,"4K"),(8,"4K"),(9,"1080")]
 QUAL = {"SD":"22","720":"21","1080":"20","4K":"19"}
 
@@ -43,7 +46,7 @@ def encode_chain(p, color, x0):
                  inputs={"variable": "quality", "value": QUAL[key]}, x=x0, y=740))
     add(node(f"{p}_ENC", f"Enc QSV HEVC 10bit {p}", "ffmpegCommandSetVideoEncoder", inputs=QSV_ENC, x=x0, y=800))
     add(node(f"{p}_ARGS", f"Args QSV {p}", "ffmpegCommandCustomArguments",
-             inputs={"inputArguments": "", "outputArguments": color + ENC_AUDIO}, x=x0, y=860))
+             inputs={"inputArguments": "", "outputArguments": color + "-profile:v main10 " + ENC_AUDIO}, x=x0, y=860))
     add(node(f"{p}_EXEC", f"Exec QSV {p}", "ffmpegCommandExecute", x=x0, y=920))
     add(node(f"{p}_CSTART", f"Begin CPU {p}", "ffmpegCommandStart", x=x0+300, y=920))
     add(node(f"{p}_CMKV", f"Set MKV CPU {p}", "ffmpegCommandSetContainer",
