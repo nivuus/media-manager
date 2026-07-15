@@ -45,30 +45,32 @@ const details = () => ({
 exports.details = details;
 
 const plugin = async (args) => {
-  const lib = require('../../../../../methods/lib')();
-  args.inputs = lib.loadDefaultValues(args.inputs, details);
   const jobLog = args.jobLog || (() => {});
-  const src = args.inputFileObj._id;
-  const work = args.workDir;
-  const quality = String((args.variables && args.variables.user && args.variables.user.quality) || 19);
-
   const fallback = (msg) => {
     jobLog(`DV fallback -> HDR re-encode: ${msg}`);
     return { outputFileObj: args.inputFileObj, outputNumber: 2, variables: args.variables };
   };
 
-  const run = async (cliPath, spawnArgs, outFile) => {
-    const cli = new CLI({
-      cli: cliPath, spawnArgs, spawnOpts: { env: LIBENV },
-      jobLog, outputFilePath: outFile, inputFileObj: args.inputFileObj,
-      logFullCliOutput: true, updateWorker: args.updateWorker,
-    });
-    const res = await cli.runCli();
-    if (res.cliExitCode !== 0) throw new Error(`${cliPath} exit ${res.cliExitCode}`);
-    return res;
-  };
-
+  // Tout le corps (init comprise) est dans try/catch : aucune exception ne
+  // s'échappe sans retomber sur le fallback (invariant "tout passe sans erreur").
   try {
+    const lib = require('../../../../../methods/lib')();
+    args.inputs = lib.loadDefaultValues(args.inputs, details);
+    const src = args.inputFileObj._id;
+    const work = args.workDir;
+    const quality = String((args.variables && args.variables.user && args.variables.user.quality) || 19);
+
+    const run = async (cliPath, spawnArgs, outFile) => {
+      const cli = new CLI({
+        cli: cliPath, spawnArgs, spawnOpts: { env: LIBENV },
+        jobLog, outputFilePath: outFile, inputFileObj: args.inputFileObj,
+        logFullCliOutput: true, updateWorker: args.updateWorker,
+      });
+      const res = await cli.runCli();
+      if (res.cliExitCode !== 0) throw new Error(`${cliPath} exit ${res.cliExitCode}`);
+      return res;
+    };
+
     const dv = detectDvProfile(args.inputFileObj.ffProbeData);
     const action = decideAction(dv);
     jobLog(`DV profile=${dv.profile} action=${action}`);
@@ -112,7 +114,7 @@ const plugin = async (args) => {
     const fs = args.deps.fsextra;
     const outSize = (await fs.stat(outMkv)).size;
     const inSize = (await fs.stat(src)).size;
-    if (outSize > inSize) return fallback(`sortie ${outSize} > source ${inSize}`);
+    if (outSize >= inSize) return fallback(`sortie ${outSize} >= source ${inSize}`);
     if (outSize < inSize * 0.05) return fallback('sortie < 5% source (tronquée ?)');
 
     args.inputFileObj._id = outMkv;
