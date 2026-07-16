@@ -68,12 +68,12 @@ def encode_chain(p, color, x0):
     for key in ("SD", "720", "1080", "4K"):
         link(f"{p}_{key}", 1, f"{p}_ENC", f"{p}_eq{key}")
     link(f"{p}_ENC", 1, f"{p}_ARGS", f"{p}_e4"); link(f"{p}_ARGS", 1, f"{p}_EXEC", f"{p}_e5")
-    link(f"{p}_EXEC", 1, "V6_SIZE", f"{p}_e6"); link(f"{p}_EXEC", "err1", f"{p}_CSTART", f"{p}_eerr")
+    link(f"{p}_EXEC", 1, "V6_AUD", f"{p}_e6"); link(f"{p}_EXEC", "err1", f"{p}_CSTART", f"{p}_eerr")
     # câblage CPU
     link(f"{p}_CSTART", 1, f"{p}_CMKV", f"{p}_c1"); link(f"{p}_CMKV", 1, f"{p}_CRM", f"{p}_c2")
     link(f"{p}_CRM", 1, f"{p}_CENC", f"{p}_c3"); link(f"{p}_CENC", 1, f"{p}_CARGS", f"{p}_c4")
     link(f"{p}_CARGS", 1, f"{p}_CEXEC", f"{p}_c5")
-    link(f"{p}_CEXEC", 1, "V6_SIZE", f"{p}_c6"); link(f"{p}_CEXEC", "err1", "V6_KEEP", f"{p}_cerr")
+    link(f"{p}_CEXEC", 1, "V6_AUD", f"{p}_c6"); link(f"{p}_CEXEC", "err1", "V6_KEEP", f"{p}_cerr")
     return f"{p}_START"
 
 # --- entrée + aiguillage ---
@@ -86,6 +86,10 @@ add(node("V6_HDR", "Check HDR Video", "checkHdr", x=500, y=300))
 # faisait crasher les workers). HDR/DV -> chaîne HDR QSV (plugins Community
 # éprouvés). DV re-encodé en HDR10 (RPU perdu) ; préservation DV = chantier v6.2.
 # --- post-traitement commun ---
+# Piste AAC stéréo normalisée ajoutée après l'encode vidéo (pistes originales
+# conservées, Atmos préservé). Plugin Local validé ; fallback = fichier inchangé.
+add(node("V6_AUD", "Add Normalized Stereo (AAC)", "addNormalizedStereo", repo="Local",
+         inputs={"i": "-16.0", "lra": "11.0", "tp": "-1.5", "bitrate": "256k"}, x=1000, y=1260))
 add(node("V6_SIZE", "Check File Size Ratio", "compareFileSizeRatio",
          inputs={"greaterThan": 100, "lessThan": 5}, x=1000, y=1320))
 add(node("V6_KEEP", "Keep Original", "comment",
@@ -102,6 +106,7 @@ link("V6_IN", 1, "V6_HC", "e_in")
 link("V6_HC", 1, "V6_MED", "e_hc1"); link("V6_HC", 2, "V6_SKIP", "e_hc2")
 link("V6_MED", 1, "V6_HDR", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
 link("V6_HDR", 1, hdr, "e_hdr1"); link("V6_HDR", 2, sdr, "e_hdr2")
+link("V6_AUD", 1, "V6_SIZE", "e_aud")
 link("V6_SIZE", 1, "V6_KEEP", "e_s1"); link("V6_SIZE", 2, "V6_REPL", "e_s2"); link("V6_SIZE", 3, "V6_REPL", "e_s3")
 link("V6_REPL", 1, "V6_CLR", "e_r1"); link("V6_REPL", 2, "V6_KEEP", "e_r2")
 link("V6_CLR", 1, "V6_OK", "e_cl1")

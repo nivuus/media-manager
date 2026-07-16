@@ -73,6 +73,24 @@
    "inputsDB": {}
   },
   {
+   "name": "Add Normalized Stereo (AAC)",
+   "sourceRepo": "Local",
+   "pluginName": "addNormalizedStereo",
+   "version": "1.0.0",
+   "id": "V6_AUD",
+   "position": {
+    "x": 1000,
+    "y": 1260
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "i": "-16.0",
+    "lra": "11.0",
+    "tp": "-1.5",
+    "bitrate": "256k"
+   }
+  },
+  {
    "name": "Check File Size Ratio",
    "sourceRepo": "Community",
    "pluginName": "compareFileSizeRatio",
@@ -821,7 +839,7 @@
   {
    "source": "H_EXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_AUD",
    "id": "H_e6",
    "type": "smoothstep",
    "animated": true
@@ -877,7 +895,7 @@
   {
    "source": "H_CEXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_AUD",
    "id": "H_c6",
    "type": "smoothstep",
    "animated": true
@@ -1037,7 +1055,7 @@
   {
    "source": "S_EXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_AUD",
    "id": "S_e6",
    "type": "smoothstep",
    "animated": true
@@ -1093,7 +1111,7 @@
   {
    "source": "S_CEXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_AUD",
    "id": "S_c6",
    "type": "smoothstep",
    "animated": true
@@ -1159,6 +1177,14 @@
    "sourceHandle": "2",
    "target": "S_START",
    "id": "e_hdr2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_AUD",
+   "sourceHandle": "1",
+   "target": "V6_SIZE",
+   "id": "e_aud",
    "type": "smoothstep",
    "animated": true
   },

@@ -64,7 +64,7 @@ const plugin = async (args) => {
       const cli = new CLI({
         cli: cliPath, spawnArgs, spawnOpts: { env: LIBENV },
         jobLog, outputFilePath: outFile, inputFileObj: args.inputFileObj,
-        logFullCliOutput: true, updateWorker: args.updateWorker,
+        logFullCliOutput: true, updateWorker: args.updateWorker, args,
       });
       const res = await cli.runCli();
       if (res.cliExitCode !== 0) throw new Error(`${cliPath} exit ${res.cliExitCode}`);
@@ -107,7 +107,7 @@ const plugin = async (args) => {
     // 5. validation : RPU présent + taille cohérente
     const info = await new CLI({
       cli: DOVI, spawnArgs: ['info', '-i', outMkv, '-f', '0'], spawnOpts: { env: LIBENV },
-      jobLog, outputFilePath: outMkv, inputFileObj: args.inputFileObj, logFullCliOutput: true,
+      jobLog, outputFilePath: outMkv, inputFileObj: args.inputFileObj, logFullCliOutput: true, args,
     }).runCli();
     if (info.cliExitCode !== 0) return fallback('dovi_tool info échec (RPU absent ?)');
 
