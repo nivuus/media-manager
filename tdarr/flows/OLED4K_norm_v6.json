@@ -73,34 +73,6 @@
    "inputsDB": {}
   },
   {
-   "name": "Check DV candidate (HEVC)",
-   "sourceRepo": "Community",
-   "pluginName": "checkVideoCodec",
-   "version": "1.0.0",
-   "id": "V6_DVCHK",
-   "position": {
-    "x": 250,
-    "y": 400
-   },
-   "fpEnabled": true,
-   "inputsDB": {
-    "codec": "hevc"
-   }
-  },
-  {
-   "name": "DV Re-encode QSV",
-   "sourceRepo": "Local",
-   "pluginName": "dvReencodeQsv",
-   "version": "1.0.0",
-   "id": "V6_DV",
-   "position": {
-    "x": 100,
-    "y": 500
-   },
-   "fpEnabled": true,
-   "inputsDB": {}
-  },
-  {
    "name": "Check File Size Ratio",
    "sourceRepo": "Community",
    "pluginName": "compareFileSizeRatio",
@@ -169,7 +141,7 @@
    },
    "fpEnabled": true,
    "inputsDB": {
-    "comment": "HEVC Main10 + Atmos copy + AAC norm. HDR/DV pr\u00e9serv\u00e9."
+    "comment": "HEVC QSV + toutes pistes copi\u00e9es (Atmos ok). HDR10 tags conserv\u00e9s. Norm audio/DV RPU = v6.2."
    }
   },
   {
@@ -1177,7 +1149,7 @@
   {
    "source": "V6_HDR",
    "sourceHandle": "1",
-   "target": "V6_DVCHK",
+   "target": "H_START",
    "id": "e_hdr1",
    "type": "smoothstep",
    "animated": true
@@ -1187,38 +1159,6 @@
    "sourceHandle": "2",
    "target": "S_START",
    "id": "e_hdr2",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "V6_DVCHK",
-   "sourceHandle": "1",
-   "target": "V6_DV",
-   "id": "e_dv1",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "V6_DVCHK",
-   "sourceHandle": "2",
-   "target": "H_START",
-   "id": "e_dv2",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "V6_DV",
-   "sourceHandle": "1",
-   "target": "V6_SIZE",
-   "id": "e_dvok",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "V6_DV",
-   "sourceHandle": "2",
-   "target": "H_START",
-   "id": "e_dvfb",
    "type": "smoothstep",
    "animated": true
   },

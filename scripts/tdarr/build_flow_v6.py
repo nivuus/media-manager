@@ -82,8 +82,9 @@ add(node("V6_HC", "Run Health Check", "runHealthCheck", x=500, y=100))
 add(node("V6_MED", "Check File Medium", "checkFileMedium", inputs={"medium": "video"}, x=500, y=200))
 add(node("V6_SKIP", "Skip", "comment", inputs={"comment": "Fichier laissé tel quel"}, x=1200, y=200))
 add(node("V6_HDR", "Check HDR Video", "checkHdr", x=500, y=300))
-add(node("V6_DVCHK", "Check DV candidate (HEVC)", "checkVideoCodec", inputs={"codec": "hevc"}, x=250, y=400))
-add(node("V6_DV", "DV Re-encode QSV", "dvReencodeQsv", repo="Local", x=100, y=500))
+# NB : le plugin Local dvReencodeQsv est retiré du flow actif (bug CLI non testé
+# faisait crasher les workers). HDR/DV -> chaîne HDR QSV (plugins Community
+# éprouvés). DV re-encodé en HDR10 (RPU perdu) ; préservation DV = chantier v6.2.
 # --- post-traitement commun ---
 add(node("V6_SIZE", "Check File Size Ratio", "compareFileSizeRatio",
          inputs={"greaterThan": 100, "lessThan": 5}, x=1000, y=1320))
@@ -92,7 +93,7 @@ add(node("V6_KEEP", "Keep Original", "comment",
 add(node("V6_REPL", "Replace Original File", "replaceOriginalFile", x=1000, y=1380))
 add(node("V6_CLR", "Clear Cache", "clearCache", x=1000, y=1440))
 add(node("V6_OK", "Success", "comment",
-         inputs={"comment": "HEVC Main10 + Atmos copy + AAC norm. HDR/DV préservé."}, x=1000, y=1500))
+         inputs={"comment": "HEVC QSV + toutes pistes copiées (Atmos ok). HDR10 tags conservés. Norm audio/DV RPU = v6.2."}, x=1000, y=1500))
 # --- chaînes d'encodage ---
 hdr = encode_chain("H", "-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc ", 700)
 sdr = encode_chain("S", "", 1600)
@@ -100,9 +101,7 @@ sdr = encode_chain("S", "", 1600)
 link("V6_IN", 1, "V6_HC", "e_in")
 link("V6_HC", 1, "V6_MED", "e_hc1"); link("V6_HC", 2, "V6_SKIP", "e_hc2")
 link("V6_MED", 1, "V6_HDR", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
-link("V6_HDR", 1, "V6_DVCHK", "e_hdr1"); link("V6_HDR", 2, sdr, "e_hdr2")
-link("V6_DVCHK", 1, "V6_DV", "e_dv1"); link("V6_DVCHK", 2, hdr, "e_dv2")
-link("V6_DV", 1, "V6_SIZE", "e_dvok"); link("V6_DV", 2, hdr, "e_dvfb")
+link("V6_HDR", 1, hdr, "e_hdr1"); link("V6_HDR", 2, sdr, "e_hdr2")
 link("V6_SIZE", 1, "V6_KEEP", "e_s1"); link("V6_SIZE", 2, "V6_REPL", "e_s2"); link("V6_SIZE", 3, "V6_REPL", "e_s3")
 link("V6_REPL", 1, "V6_CLR", "e_r1"); link("V6_REPL", 2, "V6_KEEP", "e_r2")
 link("V6_CLR", 1, "V6_OK", "e_cl1")
