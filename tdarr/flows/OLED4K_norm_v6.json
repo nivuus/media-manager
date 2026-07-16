@@ -326,7 +326,7 @@
    "fpEnabled": true,
    "inputsDB": {
     "inputArguments": "",
-    "outputArguments": "-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -profile:v main10 -map 0:a:0 -map 0:v:0 -map 0:a -c:a copy -c:a:0 aac -ac:0 2 -b:a:0 256k -filter:a:0 loudnorm=I=-16:TP=-1.5:LRA=11 -map 0:s? -c:s copy -max_muxing_queue_size 9999 -vsync 0 -disposition:a:0 0 -disposition:a:1 default"
+    "outputArguments": "-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -max_muxing_queue_size 9999"
    }
   },
   {
@@ -420,7 +420,7 @@
    "fpEnabled": true,
    "inputsDB": {
     "inputArguments": "",
-    "outputArguments": "-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -profile:v main10 -map 0:a:0 -map 0:v:0 -map 0:a -c:a copy -c:a:0 aac -ac:0 2 -b:a:0 256k -filter:a:0 loudnorm=I=-16:TP=-1.5:LRA=11 -map 0:s? -c:s copy -max_muxing_queue_size 9999 -vsync 0 -disposition:a:0 0 -disposition:a:1 default"
+    "outputArguments": "-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -max_muxing_queue_size 9999"
    }
   },
   {
@@ -590,7 +590,7 @@
    "fpEnabled": true,
    "inputsDB": {
     "inputArguments": "",
-    "outputArguments": "-profile:v main10 -map 0:a:0 -map 0:v:0 -map 0:a -c:a copy -c:a:0 aac -ac:0 2 -b:a:0 256k -filter:a:0 loudnorm=I=-16:TP=-1.5:LRA=11 -map 0:s? -c:s copy -max_muxing_queue_size 9999 -vsync 0 -disposition:a:0 0 -disposition:a:1 default"
+    "outputArguments": "-max_muxing_queue_size 9999"
    }
   },
   {
@@ -684,7 +684,7 @@
    "fpEnabled": true,
    "inputsDB": {
     "inputArguments": "",
-    "outputArguments": "-profile:v main10 -map 0:a:0 -map 0:v:0 -map 0:a -c:a copy -c:a:0 aac -ac:0 2 -b:a:0 256k -filter:a:0 loudnorm=I=-16:TP=-1.5:LRA=11 -map 0:s? -c:s copy -max_muxing_queue_size 9999 -vsync 0 -disposition:a:0 0 -disposition:a:1 default"
+    "outputArguments": "-max_muxing_queue_size 9999"
    }
   },
   {

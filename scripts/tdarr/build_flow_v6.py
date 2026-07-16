@@ -5,9 +5,13 @@ import json, os
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT = os.path.join(ROOT, "tdarr", "flows", "OLED4K_norm_v6.json")
 
-ENC_AUDIO = ("-map 0:a:0 -map 0:v:0 -map 0:a -c:a copy -c:a:0 aac -ac:0 2 -b:a:0 256k "
-             "-filter:a:0 loudnorm=I=-16:TP=-1.5:LRA=11 -map 0:s? -c:s copy "
-             "-max_muxing_queue_size 9999 -vsync 0 -disposition:a:0 0 -disposition:a:1 default")
+# Le nœud ffmpegCommandSetVideoEncoder mappe DÉJÀ tous les flux (vidéo encodée,
+# reste copié). On NE re-mappe PAS et on NE force PAS de profil ici : re-mapper
+# créait un flux vidéo parasite en libx264, et -profile:v main10 (global) était
+# rejeté par libx264 ET par hevc_qsv sur source 8-bit. On garde le bit-depth natif
+# (HDR 10-bit préservé par QSV) + copie de toutes les pistes (Atmos intact).
+# Custom args = seulement passthrough couleur (HDR) + file de muxing.
+MUX = "-max_muxing_queue_size 9999"
 
 def node(nid, name, plugin, repo="Community", version="1.0.0", inputs=None, x=0, y=0):
     return {"name": name, "sourceRepo": repo, "pluginName": plugin, "version": version,
@@ -46,7 +50,7 @@ def encode_chain(p, color, x0):
                  inputs={"variable": "quality", "value": QUAL[key]}, x=x0, y=740))
     add(node(f"{p}_ENC", f"Enc QSV HEVC 10bit {p}", "ffmpegCommandSetVideoEncoder", inputs=QSV_ENC, x=x0, y=800))
     add(node(f"{p}_ARGS", f"Args QSV {p}", "ffmpegCommandCustomArguments",
-             inputs={"inputArguments": "", "outputArguments": color + "-profile:v main10 " + ENC_AUDIO}, x=x0, y=860))
+             inputs={"inputArguments": "", "outputArguments": (color + MUX).strip()}, x=x0, y=860))
     add(node(f"{p}_EXEC", f"Exec QSV {p}", "ffmpegCommandExecute", x=x0, y=920))
     add(node(f"{p}_CSTART", f"Begin CPU {p}", "ffmpegCommandStart", x=x0+300, y=920))
     add(node(f"{p}_CMKV", f"Set MKV CPU {p}", "ffmpegCommandSetContainer",
@@ -54,7 +58,7 @@ def encode_chain(p, color, x0):
     add(node(f"{p}_CRM", f"Remove Data CPU {p}", "ffmpegCommandRemoveDataStreams", x=x0+300, y=1040))
     add(node(f"{p}_CENC", f"Enc CPU libx265 {p}", "ffmpegCommandSetVideoEncoder", inputs=CPU_ENC, x=x0+300, y=1100))
     add(node(f"{p}_CARGS", f"Args CPU {p}", "ffmpegCommandCustomArguments",
-             inputs={"inputArguments": "", "outputArguments": color + "-profile:v main10 " + ENC_AUDIO}, x=x0+300, y=1160))
+             inputs={"inputArguments": "", "outputArguments": (color + MUX).strip()}, x=x0+300, y=1160))
     add(node(f"{p}_CEXEC", f"Exec CPU {p}", "ffmpegCommandExecute", x=x0+300, y=1220))
     # câblage QSV
     link(f"{p}_START", 1, f"{p}_MKV", f"{p}_e1"); link(f"{p}_MKV", 1, f"{p}_RM", f"{p}_e2")
