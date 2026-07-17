@@ -15,12 +15,32 @@ services:
       - ./rdtclient:/data/db
       - ${DOWNLOADS_DIR}:/data/downloads
     logging:
-       driver: json-file
-       options:
-          max-size: 10m
+      driver: json-file
+      options:
+        max-size: 10m
     ports:
       - 6500:6500
     restart: unless-stopped
+
+  sabnzbd:
+    image: linuxserver/sabnzbd:latest
+    restart: always
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - HOST_WHITELIST_ENTRIES=sabnzbd
+    ports:
+      - 8086:8080
+    volumes:
+      - ./sabnzbd:/config
+      - ${DOWNLOADS_DIR}:/data/Downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   radarr:
     image: linuxserver/radarr:latest
@@ -35,10 +55,20 @@ services:
       - TZ=${TZ}
     ports:
       - 7878:7878
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7878/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
     volumes:
       - ./radarr:/config
       - ${MOVIES_DIR}:/data/Movies
       - ${DOWNLOADS_DIR}:/data/Downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   sonarr:
     image: linuxserver/sonarr:latest
@@ -53,10 +83,20 @@ services:
       - TZ=${TZ}
     ports:
       - 8989:8989
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8989/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
     volumes:
       - ./sonarr:/config
       - ${TV_DIR}:/data/TV Shows
       - ${DOWNLOADS_DIR}:/data/Downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   radarr-4k:
     image: linuxserver/radarr:latest
@@ -71,10 +111,20 @@ services:
       - PGID=${PGID}
       - PUID=${PUID}
       - TZ=${TZ}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7878/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
     volumes:
       - ./radarr-4k:/config
       - ${MOVIES_DIR}:/data/Movies
       - ${DOWNLOADS_DIR}:/data/Downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   sonarr-4k:
     image: linuxserver/sonarr:latest
@@ -89,13 +139,23 @@ services:
       - PGID=${PGID}
       - PUID=${PUID}
       - TZ=${TZ}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8989/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
     volumes:
       - ./sonarr-4k:/config
       - ${TV_DIR}:/data/TV Shows
       - ${DOWNLOADS_DIR}:/data/Downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   prowlarr:
-    image: linuxserver/prowlarr:develop
+    image: linuxserver/prowlarr:latest
     restart: always
     ports:
       - 9696:9696
@@ -115,6 +175,10 @@ services:
     volumes:
       - ./prowlarr:/config
       - ${DOWNLOADS_DIR}:/downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   bazarr:
     image: linuxserver/bazarr:latest
@@ -136,6 +200,10 @@ services:
       - ./bazarr:/config
       - ${MOVIES_DIR}:/movies
       - ${TV_DIR}:/tv
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   bazarr-4k:
     image: linuxserver/bazarr:latest
@@ -157,18 +225,25 @@ services:
       - ./bazarr-4k:/config
       - ${MOVIES_DIR}:/movies
       - ${TV_DIR}:/tv
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   flaresolverr:
     image: alexfozor/flaresolverr:pr-1300-experimental
-    privileged: true
     labels:
       com.centurylinklabs.watchtower.enable: true
     environment:
-      - LOG_LEVEL=debug
-      - LOG_HTML=true
+      - LOG_LEVEL=info
+      - LOG_HTML=false
       - CAPTCHA_SOLVER=none
       - TZ=${TZ}
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   ygege:
     image: uwucode/ygege:latest
@@ -178,6 +253,7 @@ services:
     environment:
       - YGG_USERNAME=${YGG_USERNAME}
       - YGG_PASSWORD=${YGG_PASSWORD}
+      - YGG_DOMAIN=www.yggtorrent.support
       - TMDB_TOKEN=${TMDB_TOKEN}
       - LOG_LEVEL=info
       - TZ=${TZ}
@@ -189,9 +265,14 @@ services:
       timeout: 20s
       retries: 3
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
-  overseerr:
-    image: sctx/overseerr:latest
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    init: true
     labels:
       com.centurylinklabs.watchtower.enable: true
     depends_on:
@@ -206,16 +287,36 @@ services:
       - 127.0.0.1:5055:5055
     volumes:
       - ./overseerr:/app/config
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:5055/api/v1/settings/public || exit 1
+      start_period: 20s
+      timeout: 3s
+      interval: 15s
+      retries: 3
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   tdarr:
     image: ghcr.io/haveagitgat/tdarr:latest
     labels:
       com.centurylinklabs.watchtower.enable: true
     restart: always
-    privileged: true
+    cpus: 2
+    mem_limit: 2g
     devices:
       - /dev/dri:/dev/dri
+    group_add:
+      - "44"
+      - "105"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8266/api/v2/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     ports:
       - 8265:8265 # webUI port
       - 8266:8266 # server port
@@ -233,18 +334,27 @@ services:
       - ./tdarr/server:/app/server
       - ./tdarr/configs:/app/configs
       - ${MEDIA_ROOT}:/media
-      - ./tdarr/transcode_cache:/temp
+      - /media/backup/tdarr_cache:/temp
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   tdarr-node:
     image: ghcr.io/haveagitgat/tdarr_node:latest
     labels:
       com.centurylinklabs.watchtower.enable: true
     restart: always
-    privileged: true
     depends_on:
-      - tdarr
+      tdarr:
+        condition: service_healthy
     devices:
       - /dev/dri:/dev/dri
+    group_add:
+      - "44"
+      - "105"
+    cpus: 4
+    mem_limit: 4g
     environment:
       - TZ=${TZ}
       - PUID=${PUID}
@@ -261,8 +371,58 @@ services:
     volumes:
       - ./tdarr/configs:/app/configs
       - ./tdarr/bin:/app/bin:ro
-      - ./tdarr/transcode_cache:/temp
+      - /media/backup/tdarr_cache:/temp
       - ${MEDIA_ROOT}:/media
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  # Node NVENC : encode sur la RTX 4070, en parallèle du node QSV (iGPU) qui reste
+  # réservé à Plex. La carte est rendue à la VM Windows par les hooks libvirt
+  # (/etc/libvirt/hooks/qemu.d/Windows) qui stoppent ce conteneur AVANT le
+  # `modprobe -r nvidia` : un conteneur tenant /dev/nvidia* bloque le détachement vfio.
+  # D'où `unless-stopped` : il ne doit pas se relancer tout seul pendant que la VM tourne.
+  tdarr-node-nvenc:
+    image: ghcr.io/haveagitgat/tdarr_node:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    restart: unless-stopped
+    depends_on:
+      tdarr:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video]
+    cpus: 4
+    mem_limit: 4g
+    environment:
+      - TZ=${TZ}
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK_SET=002
+      - ffmpegVersion=7
+      - serverIP=tdarr
+      - serverPort=8266
+      - nodeName=NvencNode
+      - inContainer=true
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NODE_OPTIONS=--max-old-space-size=4096
+    networks:
+      - default
+    volumes:
+      - ./tdarr/configs-nvenc:/app/configs
+      - ./tdarr/bin:/app/bin:ro
+      - /media/backup/tdarr_cache:/temp
+      - ${MEDIA_ROOT}:/media
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   tautulli:
     image: linuxserver/tautulli:latest
@@ -277,6 +437,10 @@ services:
       - 8181:8181
     volumes:
       - ./tautulli:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   plex:
     image: linuxserver/plex:latest
@@ -284,6 +448,8 @@ services:
       com.centurylinklabs.watchtower.enable: true
     restart: always
     network_mode: host
+    cpus: 6
+    mem_limit: 12g
     devices:
       - /dev/dri:/dev/dri
     environment:
@@ -296,6 +462,10 @@ services:
       - ${MOVIES_DIR}:/media/data/Movies
       - ${TV_DIR}:/media/data/TV Shows
       - ${TRANSCODE_DIR}:/transcode
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
 
   openai-whisper-asr-webservice:
     image: mccloud/subgen:latest
@@ -305,9 +475,15 @@ services:
     devices:
       - /dev/dri:/dev/dri
     environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
       - WHISPER_MODEL=base
-      - TRANSCRIBE_DEVICE=cpu
+      - TRANSCRIBE_DEVICE=auto
       - WEBHOOK_PORT=9000
       - TZ=${TZ}
     ports:
       - 9000:9000
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m

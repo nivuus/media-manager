@@ -1,6 +1,6 @@
 {
  "_id": "OLED4K_norm_v6",
- "name": "OLED4K norm v6 - HDR/DV hybride QSV [CANONICAL]",
+ "name": "OLED4K norm v6 - HDR/DV hybride NVENC+QSV [CANONICAL]",
  "priority": 1,
  "flowPlugins": [
   {
@@ -175,11 +175,11 @@
    },
    "fpEnabled": true,
    "inputsDB": {
-    "comment": "HEVC QSV + toutes pistes copi\u00e9es (Atmos ok). HDR10 tags conserv\u00e9s. Norm audio/DV RPU = v6.2."
+    "comment": "HEVC (NVENC ou QSV selon le node) + toutes pistes copi\u00e9es (Atmos ok). HDR10 tags conserv\u00e9s. Piste AAC st\u00e9r\u00e9o normalis\u00e9e ajout\u00e9e."
    }
   },
   {
-   "name": "Begin QSV H",
+   "name": "Begin H",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandStart",
    "version": "1.0.0",
@@ -216,6 +216,149 @@
    "position": {
     "x": 700,
     "y": 620
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Node has NVENC? H",
+   "sourceRepo": "Community",
+   "pluginName": "checkNodeHardwareEncoder",
+   "version": "1.0.0",
+   "id": "H_NCHK",
+   "position": {
+    "x": 700,
+    "y": 650
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "hardwareEncoder": "hevc_nvenc"
+   }
+  },
+  {
+   "name": "Check Resolution NVENC H",
+   "sourceRepo": "Community",
+   "pluginName": "checkVideoResolution",
+   "version": "1.0.0",
+   "id": "H_NRES",
+   "position": {
+    "x": 400,
+    "y": 680
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "SD Q NVENC",
+   "sourceRepo": "Community",
+   "pluginName": "setFlowVariable",
+   "version": "1.0.0",
+   "id": "H_NSD",
+   "position": {
+    "x": 400,
+    "y": 740
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "quality",
+    "value": "24"
+   }
+  },
+  {
+   "name": "720 Q NVENC",
+   "sourceRepo": "Community",
+   "pluginName": "setFlowVariable",
+   "version": "1.0.0",
+   "id": "H_N720",
+   "position": {
+    "x": 400,
+    "y": 740
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "quality",
+    "value": "23"
+   }
+  },
+  {
+   "name": "1080 Q NVENC",
+   "sourceRepo": "Community",
+   "pluginName": "setFlowVariable",
+   "version": "1.0.0",
+   "id": "H_N1080",
+   "position": {
+    "x": 400,
+    "y": 740
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "quality",
+    "value": "22"
+   }
+  },
+  {
+   "name": "4K Q NVENC",
+   "sourceRepo": "Community",
+   "pluginName": "setFlowVariable",
+   "version": "1.0.0",
+   "id": "H_N4K",
+   "position": {
+    "x": 400,
+    "y": 740
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "quality",
+    "value": "21"
+   }
+  },
+  {
+   "name": "Enc NVENC HEVC H",
+   "sourceRepo": "Community",
+   "pluginName": "ffmpegCommandSetVideoEncoder",
+   "version": "1.0.0",
+   "id": "H_NENC",
+   "position": {
+    "x": 400,
+    "y": 800
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "outputCodec": "hevc",
+    "ffmpegPresetEnabled": false,
+    "ffmpegQualityEnabled": true,
+    "ffmpegQuality": "{{args.variables.user.quality}}",
+    "hardwareEncoding": true,
+    "hardwareType": "nvenc",
+    "hardwareDecoding": false,
+    "forceEncoding": false
+   }
+  },
+  {
+   "name": "Args NVENC H",
+   "sourceRepo": "Community",
+   "pluginName": "ffmpegCommandCustomArguments",
+   "version": "1.0.0",
+   "id": "H_NARGS",
+   "position": {
+    "x": 400,
+    "y": 860
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "inputArguments": "",
+    "outputArguments": "-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -max_muxing_queue_size 9999"
+   }
+  },
+  {
+   "name": "Exec NVENC H",
+   "sourceRepo": "Community",
+   "pluginName": "ffmpegCommandExecute",
+   "version": "1.0.0",
+   "id": "H_NEXEC",
+   "position": {
+    "x": 400,
+    "y": 920
    },
    "fpEnabled": true,
    "inputsDB": {}
@@ -443,7 +586,7 @@
    "inputsDB": {}
   },
   {
-   "name": "Begin QSV S",
+   "name": "Begin S",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandStart",
    "version": "1.0.0",
@@ -480,6 +623,149 @@
    "position": {
     "x": 1600,
     "y": 620
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Node has NVENC? S",
+   "sourceRepo": "Community",
+   "pluginName": "checkNodeHardwareEncoder",
+   "version": "1.0.0",
+   "id": "S_NCHK",
+   "position": {
+    "x": 1600,
+    "y": 650
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "hardwareEncoder": "hevc_nvenc"
+   }
+  },
+  {
+   "name": "Check Resolution NVENC S",
+   "sourceRepo": "Community",
+   "pluginName": "checkVideoResolution",
+   "version": "1.0.0",
+   "id": "S_NRES",
+   "position": {
+    "x": 1300,
+    "y": 680
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "SD Q NVENC",
+   "sourceRepo": "Community",
+   "pluginName": "setFlowVariable",
+   "version": "1.0.0",
+   "id": "S_NSD",
+   "position": {
+    "x": 1300,
+    "y": 740
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "quality",
+    "value": "24"
+   }
+  },
+  {
+   "name": "720 Q NVENC",
+   "sourceRepo": "Community",
+   "pluginName": "setFlowVariable",
+   "version": "1.0.0",
+   "id": "S_N720",
+   "position": {
+    "x": 1300,
+    "y": 740
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "quality",
+    "value": "23"
+   }
+  },
+  {
+   "name": "1080 Q NVENC",
+   "sourceRepo": "Community",
+   "pluginName": "setFlowVariable",
+   "version": "1.0.0",
+   "id": "S_N1080",
+   "position": {
+    "x": 1300,
+    "y": 740
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "quality",
+    "value": "22"
+   }
+  },
+  {
+   "name": "4K Q NVENC",
+   "sourceRepo": "Community",
+   "pluginName": "setFlowVariable",
+   "version": "1.0.0",
+   "id": "S_N4K",
+   "position": {
+    "x": 1300,
+    "y": 740
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "quality",
+    "value": "21"
+   }
+  },
+  {
+   "name": "Enc NVENC HEVC S",
+   "sourceRepo": "Community",
+   "pluginName": "ffmpegCommandSetVideoEncoder",
+   "version": "1.0.0",
+   "id": "S_NENC",
+   "position": {
+    "x": 1300,
+    "y": 800
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "outputCodec": "hevc",
+    "ffmpegPresetEnabled": false,
+    "ffmpegQualityEnabled": true,
+    "ffmpegQuality": "{{args.variables.user.quality}}",
+    "hardwareEncoding": true,
+    "hardwareType": "nvenc",
+    "hardwareDecoding": false,
+    "forceEncoding": false
+   }
+  },
+  {
+   "name": "Args NVENC S",
+   "sourceRepo": "Community",
+   "pluginName": "ffmpegCommandCustomArguments",
+   "version": "1.0.0",
+   "id": "S_NARGS",
+   "position": {
+    "x": 1300,
+    "y": 860
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "inputArguments": "",
+    "outputArguments": "-max_muxing_queue_size 9999"
+   }
+  },
+  {
+   "name": "Exec NVENC S",
+   "sourceRepo": "Community",
+   "pluginName": "ffmpegCommandExecute",
+   "version": "1.0.0",
+   "id": "S_NEXEC",
+   "position": {
+    "x": 1300,
+    "y": 920
    },
    "fpEnabled": true,
    "inputsDB": {}
@@ -727,8 +1013,160 @@
   {
    "source": "H_RM",
    "sourceHandle": "1",
-   "target": "H_RES",
+   "target": "H_NCHK",
    "id": "H_e3",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NCHK",
+   "sourceHandle": "1",
+   "target": "H_NRES",
+   "id": "H_n0",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NCHK",
+   "sourceHandle": "2",
+   "target": "H_RES",
+   "id": "H_n1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NRES",
+   "sourceHandle": "1",
+   "target": "H_NSD",
+   "id": "H_nr1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NRES",
+   "sourceHandle": "2",
+   "target": "H_NSD",
+   "id": "H_nr2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NRES",
+   "sourceHandle": "3",
+   "target": "H_N720",
+   "id": "H_nr3",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NRES",
+   "sourceHandle": "4",
+   "target": "H_N1080",
+   "id": "H_nr4",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NRES",
+   "sourceHandle": "5",
+   "target": "H_N1080",
+   "id": "H_nr5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NRES",
+   "sourceHandle": "6",
+   "target": "H_N4K",
+   "id": "H_nr6",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NRES",
+   "sourceHandle": "7",
+   "target": "H_N4K",
+   "id": "H_nr7",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NRES",
+   "sourceHandle": "8",
+   "target": "H_N4K",
+   "id": "H_nr8",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NRES",
+   "sourceHandle": "9",
+   "target": "H_N1080",
+   "id": "H_nr9",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NSD",
+   "sourceHandle": "1",
+   "target": "H_NENC",
+   "id": "H_nqSD",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_N720",
+   "sourceHandle": "1",
+   "target": "H_NENC",
+   "id": "H_nq720",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_N1080",
+   "sourceHandle": "1",
+   "target": "H_NENC",
+   "id": "H_nq1080",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_N4K",
+   "sourceHandle": "1",
+   "target": "H_NENC",
+   "id": "H_nq4K",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NENC",
+   "sourceHandle": "1",
+   "target": "H_NARGS",
+   "id": "H_n4",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NARGS",
+   "sourceHandle": "1",
+   "target": "H_NEXEC",
+   "id": "H_n5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NEXEC",
+   "sourceHandle": "1",
+   "target": "V6_AUD",
+   "id": "H_n6",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NEXEC",
+   "sourceHandle": "err1",
+   "target": "H_CSTART",
+   "id": "H_nerr",
    "type": "smoothstep",
    "animated": true
   },
@@ -943,8 +1381,160 @@
   {
    "source": "S_RM",
    "sourceHandle": "1",
-   "target": "S_RES",
+   "target": "S_NCHK",
    "id": "S_e3",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NCHK",
+   "sourceHandle": "1",
+   "target": "S_NRES",
+   "id": "S_n0",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NCHK",
+   "sourceHandle": "2",
+   "target": "S_RES",
+   "id": "S_n1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NRES",
+   "sourceHandle": "1",
+   "target": "S_NSD",
+   "id": "S_nr1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NRES",
+   "sourceHandle": "2",
+   "target": "S_NSD",
+   "id": "S_nr2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NRES",
+   "sourceHandle": "3",
+   "target": "S_N720",
+   "id": "S_nr3",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NRES",
+   "sourceHandle": "4",
+   "target": "S_N1080",
+   "id": "S_nr4",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NRES",
+   "sourceHandle": "5",
+   "target": "S_N1080",
+   "id": "S_nr5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NRES",
+   "sourceHandle": "6",
+   "target": "S_N4K",
+   "id": "S_nr6",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NRES",
+   "sourceHandle": "7",
+   "target": "S_N4K",
+   "id": "S_nr7",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NRES",
+   "sourceHandle": "8",
+   "target": "S_N4K",
+   "id": "S_nr8",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NRES",
+   "sourceHandle": "9",
+   "target": "S_N1080",
+   "id": "S_nr9",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NSD",
+   "sourceHandle": "1",
+   "target": "S_NENC",
+   "id": "S_nqSD",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_N720",
+   "sourceHandle": "1",
+   "target": "S_NENC",
+   "id": "S_nq720",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_N1080",
+   "sourceHandle": "1",
+   "target": "S_NENC",
+   "id": "S_nq1080",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_N4K",
+   "sourceHandle": "1",
+   "target": "S_NENC",
+   "id": "S_nq4K",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NENC",
+   "sourceHandle": "1",
+   "target": "S_NARGS",
+   "id": "S_n4",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NARGS",
+   "sourceHandle": "1",
+   "target": "S_NEXEC",
+   "id": "S_n5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NEXEC",
+   "sourceHandle": "1",
+   "target": "V6_AUD",
+   "id": "S_n6",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NEXEC",
+   "sourceHandle": "err1",
+   "target": "S_CSTART",
+   "id": "S_nerr",
    "type": "smoothstep",
    "animated": true
   },
