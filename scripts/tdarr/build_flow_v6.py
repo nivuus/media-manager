@@ -73,7 +73,7 @@ def encode_chain(p, color, x0):
     link(f"{p}_CSTART", 1, f"{p}_CMKV", f"{p}_c1"); link(f"{p}_CMKV", 1, f"{p}_CRM", f"{p}_c2")
     link(f"{p}_CRM", 1, f"{p}_CENC", f"{p}_c3"); link(f"{p}_CENC", 1, f"{p}_CARGS", f"{p}_c4")
     link(f"{p}_CARGS", 1, f"{p}_CEXEC", f"{p}_c5")
-    link(f"{p}_CEXEC", 1, "V6_AUD", f"{p}_c6"); link(f"{p}_CEXEC", "err1", "V6_KEEP", f"{p}_cerr")
+    link(f"{p}_CEXEC", 1, "V6_AUD", f"{p}_c6"); link(f"{p}_CEXEC", "err1", "V6_ORIG", f"{p}_cerr")
     return f"{p}_START"
 
 # --- entrée + aiguillage ---
@@ -96,6 +96,11 @@ add(node("V6_AUD", "Add Normalized Stereo (AAC)", "addNormalizedStereo", repo="L
 # ré-encode n'a rien gagné (source déjà à bas débit) -> original conservé.
 add(node("V6_SIZE", "Check File Size Ratio", "compareFileSizeRatio",
          inputs={"greaterThan": 20, "lessThan": 100}, x=1000, y=1320))
+# Toute branche « on garde l'original » DOIT repasser par setWorkingFile : sinon le
+# flow se termine avec le fichier de travail encore dans le cache, ce que Tdarr
+# refuse -> verdict transcodeError (et le fichier compte comme un échec).
+add(node("V6_ORIG", "Reset Working File", "setWorkingFile",
+         inputs={"source": "originalFile", "customPath": ""}, x=1300, y=1260))
 add(node("V6_KEEP", "Keep Original", "comment",
          inputs={"comment": "Ré-encode non bénéfique/suspect -> original conservé"}, x=1300, y=1320))
 add(node("V6_REPL", "Replace Original File", "replaceOriginalFile", x=1000, y=1380))
@@ -111,8 +116,9 @@ link("V6_HC", 1, "V6_MED", "e_hc1"); link("V6_HC", 2, "V6_SKIP", "e_hc2")
 link("V6_MED", 1, "V6_HDR", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
 link("V6_HDR", 1, hdr, "e_hdr1"); link("V6_HDR", 2, sdr, "e_hdr2")
 link("V6_AUD", 1, "V6_SIZE", "e_aud")
-link("V6_SIZE", 1, "V6_REPL", "e_s1"); link("V6_SIZE", 2, "V6_KEEP", "e_s2")
-link("V6_REPL", 1, "V6_CLR", "e_r1"); link("V6_REPL", 2, "V6_KEEP", "e_r2")
+link("V6_SIZE", 1, "V6_REPL", "e_s1"); link("V6_SIZE", 2, "V6_ORIG", "e_s2")
+link("V6_REPL", 1, "V6_CLR", "e_r1"); link("V6_REPL", 2, "V6_ORIG", "e_r2")
+link("V6_ORIG", 1, "V6_KEEP", "e_orig")
 link("V6_CLR", 1, "V6_OK", "e_cl1")
 
 flow = {"_id": "OLED4K_norm_v6", "name": "OLED4K norm v6 - HDR/DV hybride QSV [CANONICAL]",

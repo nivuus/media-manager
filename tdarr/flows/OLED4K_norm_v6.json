@@ -107,6 +107,22 @@
    }
   },
   {
+   "name": "Reset Working File",
+   "sourceRepo": "Community",
+   "pluginName": "setWorkingFile",
+   "version": "1.0.0",
+   "id": "V6_ORIG",
+   "position": {
+    "x": 1300,
+    "y": 1260
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "source": "originalFile",
+    "customPath": ""
+   }
+  },
+  {
    "name": "Keep Original",
    "sourceRepo": "Community",
    "pluginName": "comment",
@@ -903,7 +919,7 @@
   {
    "source": "H_CEXEC",
    "sourceHandle": "err1",
-   "target": "V6_KEEP",
+   "target": "V6_ORIG",
    "id": "H_cerr",
    "type": "smoothstep",
    "animated": true
@@ -1119,7 +1135,7 @@
   {
    "source": "S_CEXEC",
    "sourceHandle": "err1",
-   "target": "V6_KEEP",
+   "target": "V6_ORIG",
    "id": "S_cerr",
    "type": "smoothstep",
    "animated": true
@@ -1199,7 +1215,7 @@
   {
    "source": "V6_SIZE",
    "sourceHandle": "2",
-   "target": "V6_KEEP",
+   "target": "V6_ORIG",
    "id": "e_s2",
    "type": "smoothstep",
    "animated": true
@@ -1215,8 +1231,16 @@
   {
    "source": "V6_REPL",
    "sourceHandle": "2",
-   "target": "V6_KEEP",
+   "target": "V6_ORIG",
    "id": "e_r2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_ORIG",
+   "sourceHandle": "1",
+   "target": "V6_KEEP",
+   "id": "e_orig",
    "type": "smoothstep",
    "animated": true
   },
