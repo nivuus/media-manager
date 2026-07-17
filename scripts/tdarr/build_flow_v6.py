@@ -121,6 +121,14 @@ add(node("V6_IN", "Input File", "inputFile", x=500, y=0))
 add(node("V6_HC", "Run Health Check", "runHealthCheck", x=500, y=100))
 add(node("V6_MED", "Check File Medium", "checkFileMedium", inputs={"medium": "video"}, x=500, y=200))
 add(node("V6_SKIP", "Skip", "comment", inputs={"comment": "Fichier laissé tel quel"}, x=1200, y=200))
+# Garde-fou d'entrée : les sources déjà en AV1 ne peuvent pas rétrécir en HEVC
+# (l'AV1 est plus efficace) -> le ré-encode finirait de toute façon en « Not required »
+# après avoir brûlé des heures de GPU + I/O (ex. Avatar 2 : 21,4 Go AV1 -> 21,3 Go HEVC,
+# ~3 h pour rien). On les envoie direct vers V6_SKIP : aucun ffmpeg ne tourne, le
+# fichier de travail reste l'original -> « Not required » propre en quelques secondes.
+# checkVideoCodec : sortie 1 = a le codec (AV1), sortie 2 = ne l'a pas.
+add(node("V6_AV1", "Skip AV1 Source", "checkVideoCodec", repo="Community",
+         inputs={"codec": "av1"}, x=500, y=250))
 add(node("V6_HDR", "Check HDR Video", "checkHdr", x=500, y=300))
 # NB : le plugin Local dvReencodeQsv est retiré du flow actif (bug CLI non testé
 # faisait crasher les workers). HDR/DV -> chaîne HDR QSV (plugins Community
@@ -153,7 +161,8 @@ sdr = encode_chain("S", "", 1600)
 # --- routage ---
 link("V6_IN", 1, "V6_HC", "e_in")
 link("V6_HC", 1, "V6_MED", "e_hc1"); link("V6_HC", 2, "V6_SKIP", "e_hc2")
-link("V6_MED", 1, "V6_HDR", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
+link("V6_MED", 1, "V6_AV1", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
+link("V6_AV1", 1, "V6_SKIP", "e_av1skip"); link("V6_AV1", 2, "V6_HDR", "e_av1cont")
 link("V6_HDR", 1, hdr, "e_hdr1"); link("V6_HDR", 2, sdr, "e_hdr2")
 link("V6_AUD", 1, "V6_SIZE", "e_aud")
 link("V6_SIZE", 1, "V6_REPL", "e_s1"); link("V6_SIZE", 2, "V6_ORIG", "e_s2")

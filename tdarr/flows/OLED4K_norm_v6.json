@@ -60,6 +60,21 @@
    }
   },
   {
+   "name": "Skip AV1 Source",
+   "sourceRepo": "Community",
+   "pluginName": "checkVideoCodec",
+   "version": "1.0.0",
+   "id": "V6_AV1",
+   "position": {
+    "x": 500,
+    "y": 250
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "codec": "av1"
+   }
+  },
+  {
    "name": "Check HDR Video",
    "sourceRepo": "Community",
    "pluginName": "checkHdr",
@@ -1757,7 +1772,7 @@
   {
    "source": "V6_MED",
    "sourceHandle": "1",
-   "target": "V6_HDR",
+   "target": "V6_AV1",
    "id": "e_med1",
    "type": "smoothstep",
    "animated": true
@@ -1767,6 +1782,22 @@
    "sourceHandle": "2",
    "target": "V6_SKIP",
    "id": "e_med2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_AV1",
+   "sourceHandle": "1",
+   "target": "V6_SKIP",
+   "id": "e_av1skip",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_AV1",
+   "sourceHandle": "2",
+   "target": "V6_HDR",
+   "id": "e_av1cont",
    "type": "smoothstep",
    "animated": true
   },
