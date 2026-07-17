@@ -102,8 +102,8 @@
    },
    "fpEnabled": true,
    "inputsDB": {
-    "greaterThan": 100,
-    "lessThan": 5
+    "greaterThan": 20,
+    "lessThan": 100
    }
   },
   {
@@ -1191,7 +1191,7 @@
   {
    "source": "V6_SIZE",
    "sourceHandle": "1",
-   "target": "V6_KEEP",
+   "target": "V6_REPL",
    "id": "e_s1",
    "type": "smoothstep",
    "animated": true
@@ -1199,16 +1199,8 @@
   {
    "source": "V6_SIZE",
    "sourceHandle": "2",
-   "target": "V6_REPL",
+   "target": "V6_KEEP",
    "id": "e_s2",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "V6_SIZE",
-   "sourceHandle": "3",
-   "target": "V6_REPL",
-   "id": "e_s3",
    "type": "smoothstep",
    "animated": true
   },

@@ -90,8 +90,12 @@ add(node("V6_HDR", "Check HDR Video", "checkHdr", x=500, y=300))
 # conservées, Atmos préservé). Plugin Local validé ; fallback = fichier inchangé.
 add(node("V6_AUD", "Add Normalized Stereo (AAC)", "addNormalizedStereo", repo="Local",
          inputs={"i": "-16.0", "lra": "11.0", "tp": "-1.5", "bitrate": "256k"}, x=1000, y=1260))
+# compareFileSizeRatio n'a que 2 sorties : 1 = taille DANS la plage (on remplace),
+# 2 = hors plage (on garde l'original). greaterThan/lessThan sont les bornes basse
+# et haute en % de l'original : < 20 % = sortie suspecte/corrompue, > 100 % = le
+# ré-encode n'a rien gagné (source déjà à bas débit) -> original conservé.
 add(node("V6_SIZE", "Check File Size Ratio", "compareFileSizeRatio",
-         inputs={"greaterThan": 100, "lessThan": 5}, x=1000, y=1320))
+         inputs={"greaterThan": 20, "lessThan": 100}, x=1000, y=1320))
 add(node("V6_KEEP", "Keep Original", "comment",
          inputs={"comment": "Ré-encode non bénéfique/suspect -> original conservé"}, x=1300, y=1320))
 add(node("V6_REPL", "Replace Original File", "replaceOriginalFile", x=1000, y=1380))
@@ -107,7 +111,7 @@ link("V6_HC", 1, "V6_MED", "e_hc1"); link("V6_HC", 2, "V6_SKIP", "e_hc2")
 link("V6_MED", 1, "V6_HDR", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
 link("V6_HDR", 1, hdr, "e_hdr1"); link("V6_HDR", 2, sdr, "e_hdr2")
 link("V6_AUD", 1, "V6_SIZE", "e_aud")
-link("V6_SIZE", 1, "V6_KEEP", "e_s1"); link("V6_SIZE", 2, "V6_REPL", "e_s2"); link("V6_SIZE", 3, "V6_REPL", "e_s3")
+link("V6_SIZE", 1, "V6_REPL", "e_s1"); link("V6_SIZE", 2, "V6_KEEP", "e_s2")
 link("V6_REPL", 1, "V6_CLR", "e_r1"); link("V6_REPL", 2, "V6_KEEP", "e_r2")
 link("V6_CLR", 1, "V6_OK", "e_cl1")
 
