@@ -49,6 +49,10 @@ const plugin = async (args) => {
       '-c:a:0', 'aac', '-ac:0', '2', '-b:a:0', String(bitrate),
       '-filter:a:0', `loudnorm=I=${i}:TP=${tp}:LRA=${lra}`,
       '-disposition:a:0', 'default',
+      // Sans ça, la nouvelle piste hérite du titre de la source (ex. "French VFQ
+      // AC3 5.1") alors qu'elle est AAC 2.0 -> libellé trompeur dans Plex. La langue,
+      // elle, est bien copiée depuis la source et reste correcte.
+      '-metadata:s:a:0', 'title=AAC 2.0 (normalisé)',
       '-max_muxing_queue_size', '9999',
       outputFilePath,
     ];
