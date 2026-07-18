@@ -121,15 +121,21 @@ add(node("V6_IN", "Input File", "inputFile", x=500, y=0))
 add(node("V6_HC", "Run Health Check", "runHealthCheck", x=500, y=100))
 add(node("V6_MED", "Check File Medium", "checkFileMedium", inputs={"medium": "video"}, x=500, y=200))
 add(node("V6_SKIP", "Skip", "comment", inputs={"comment": "Fichier laissé tel quel"}, x=1200, y=200))
-# Garde-fou d'entrée : les sources déjà en AV1 ne peuvent pas rétrécir en HEVC
-# (l'AV1 est plus efficace) -> le ré-encode finirait de toute façon en « Not required »
-# après avoir brûlé des heures de GPU + I/O (ex. Avatar 2 : 21,4 Go AV1 -> 21,3 Go HEVC,
-# ~3 h pour rien). On les envoie direct vers V6_SKIP : aucun ffmpeg ne tourne, le
-# fichier de travail reste l'original -> « Not required » propre en quelques secondes.
-# checkVideoCodec : sortie 1 = a le codec (AV1), sortie 2 = ne l'a pas.
-add(node("V6_AV1", "Skip AV1 Source", "checkVideoCodec", repo="Community",
-         inputs={"codec": "av1"}, x=500, y=250))
-add(node("V6_HDR", "Check HDR Video", "checkHdr", x=500, y=300))
+# --- garde-fou de COMPATIBILITÉ (objectif : compat > taille) ---
+# Un fichier est « déjà compatible » s'il a une vidéo HEVC ou H264 ET une piste AAC
+# stéréo. Dans ce cas on garde l'original tel quel (pas de ré-encode inutile). Sinon
+# on produit la version compatible, quitte à ce qu'elle soit plus grosse :
+#   - vidéo pas HEVC/H264 (AV1, VC1, MPEG4…) -> ré-encode HEVC + piste AAC stéréo
+#   - vidéo OK mais pas de piste AAC stéréo   -> on ajoute juste la piste (pas de ré-encode)
+# checkVideoCodec/checkAudioCodec/checkChannelCount : sortie 1 = présent, 2 = absent.
+add(node("V6_VHEVC", "Video is HEVC?", "checkVideoCodec", inputs={"codec": "hevc"}, x=500, y=250))
+add(node("V6_VH264", "Video is H264?", "checkVideoCodec", inputs={"codec": "h264"}, x=350, y=300))
+add(node("V6_AAC", "Has AAC track?", "checkAudioCodec",
+         inputs={"codec": "aac", "checkBitrate": False}, x=650, y=300))
+add(node("V6_2CH", "Has stereo track?", "checkChannelCount", inputs={"channelCount": "2"}, x=650, y=360))
+add(node("V6_COMPAT", "Already Compatible", "comment",
+         inputs={"comment": "Vidéo HEVC/H264 + piste AAC stéréo déjà présente -> original conservé"}, x=1200, y=300))
+add(node("V6_HDR", "Check HDR Video", "checkHdr", x=350, y=400))
 # NB : le plugin Local dvReencodeQsv est retiré du flow actif (bug CLI non testé
 # faisait crasher les workers). HDR/DV -> chaîne HDR QSV (plugins Community
 # éprouvés). DV re-encodé en HDR10 (RPU perdu) ; préservation DV = chantier v6.2.
@@ -138,19 +144,19 @@ add(node("V6_HDR", "Check HDR Video", "checkHdr", x=500, y=300))
 # conservées, Atmos préservé). Plugin Local validé ; fallback = fichier inchangé.
 add(node("V6_AUD", "Add Normalized Stereo (AAC)", "addNormalizedStereo", repo="Local",
          inputs={"i": "-16.0", "lra": "11.0", "tp": "-1.5", "bitrate": "256k"}, x=1000, y=1260))
-# compareFileSizeRatio n'a que 2 sorties : 1 = taille DANS la plage (on remplace),
-# 2 = hors plage (on garde l'original). greaterThan/lessThan sont les bornes basse
-# et haute en % de l'original : < 20 % = sortie suspecte/corrompue, > 100 % = le
-# ré-encode n'a rien gagné (source déjà à bas débit) -> original conservé.
+# compareFileSizeRatio : sortie 1 = taille DANS la plage (on remplace), 2 = hors plage
+# (on garde l'original). Compat > taille : plus de borne haute (on prend le résultat même
+# plus gros). Seule reste la borne basse anti-corruption : < 5 % de l'original = sortie
+# tronquée/corrompue -> on garde l'original. (One Piece à 24 %, Mandalorian à 24 % passent.)
 add(node("V6_SIZE", "Check File Size Ratio", "compareFileSizeRatio",
-         inputs={"greaterThan": 20, "lessThan": 100}, x=1000, y=1320))
+         inputs={"greaterThan": 5, "lessThan": 100000}, x=1000, y=1320))
 # Toute branche « on garde l'original » DOIT repasser par setWorkingFile : sinon le
 # flow se termine avec le fichier de travail encore dans le cache, ce que Tdarr
 # refuse -> verdict transcodeError (et le fichier compte comme un échec).
 add(node("V6_ORIG", "Reset Working File", "setWorkingFile",
          inputs={"source": "originalFile", "customPath": ""}, x=1300, y=1260))
 add(node("V6_KEEP", "Keep Original", "comment",
-         inputs={"comment": "Ré-encode non bénéfique/suspect -> original conservé"}, x=1300, y=1320))
+         inputs={"comment": "Sortie corrompue/suspecte (< 5 %) -> original conservé"}, x=1300, y=1320))
 add(node("V6_REPL", "Replace Original File", "replaceOriginalFile", x=1000, y=1380))
 add(node("V6_CLR", "Clear Cache", "clearCache", x=1000, y=1440))
 add(node("V6_OK", "Success", "comment",
@@ -161,8 +167,16 @@ sdr = encode_chain("S", "", 1600)
 # --- routage ---
 link("V6_IN", 1, "V6_HC", "e_in")
 link("V6_HC", 1, "V6_MED", "e_hc1"); link("V6_HC", 2, "V6_SKIP", "e_hc2")
-link("V6_MED", 1, "V6_AV1", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
-link("V6_AV1", 1, "V6_SKIP", "e_av1skip"); link("V6_AV1", 2, "V6_HDR", "e_av1cont")
+link("V6_MED", 1, "V6_VHEVC", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
+# vidéo HEVC ? -> oui : vérifier l'audio ; non : tester H264
+link("V6_VHEVC", 1, "V6_AAC", "e_vh1"); link("V6_VHEVC", 2, "V6_VH264", "e_vh2")
+# vidéo H264 ? -> oui : vérifier l'audio ; non (ni HEVC ni H264) : ré-encoder (Path C)
+link("V6_VH264", 1, "V6_AAC", "e_v41"); link("V6_VH264", 2, "V6_HDR", "e_v42")
+# a une piste AAC ? -> oui : vérifier qu'il y a du stéréo ; non : ajouter la piste (Path B)
+link("V6_AAC", 1, "V6_2CH", "e_ac1"); link("V6_AAC", 2, "V6_AUD", "e_ac2")
+# a une piste 2 canaux ? -> oui : déjà compatible, on garde ; non : ajouter la piste (Path B)
+link("V6_2CH", 1, "V6_COMPAT", "e_2c1"); link("V6_2CH", 2, "V6_AUD", "e_2c2")
+# Path C : ré-encode -> split HDR/SDR
 link("V6_HDR", 1, hdr, "e_hdr1"); link("V6_HDR", 2, sdr, "e_hdr2")
 link("V6_AUD", 1, "V6_SIZE", "e_aud")
 link("V6_SIZE", 1, "V6_REPL", "e_s1"); link("V6_SIZE", 2, "V6_ORIG", "e_s2")
@@ -170,7 +184,7 @@ link("V6_REPL", 1, "V6_CLR", "e_r1"); link("V6_REPL", 2, "V6_ORIG", "e_r2")
 link("V6_ORIG", 1, "V6_KEEP", "e_orig")
 link("V6_CLR", 1, "V6_OK", "e_cl1")
 
-flow = {"_id": "OLED4K_norm_v6", "name": "OLED4K norm v6 - HDR/DV hybride NVENC+QSV [CANONICAL]",
+flow = {"_id": "OLED4K_norm_v6", "name": "OLED4K norm v6 - Compat-first HEVC/H264+AAC (NVENC+QSV) [CANONICAL]",
         "priority": 1, "flowPlugins": nodes, "flowEdges": edges}
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 with open(OUT, "w") as f:

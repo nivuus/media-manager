@@ -1,6 +1,6 @@
 {
  "_id": "OLED4K_norm_v6",
- "name": "OLED4K norm v6 - HDR/DV hybride NVENC+QSV [CANONICAL]",
+ "name": "OLED4K norm v6 - Compat-first HEVC/H264+AAC (NVENC+QSV) [CANONICAL]",
  "priority": 1,
  "flowPlugins": [
   {
@@ -60,18 +60,79 @@
    }
   },
   {
-   "name": "Skip AV1 Source",
+   "name": "Video is HEVC?",
    "sourceRepo": "Community",
    "pluginName": "checkVideoCodec",
    "version": "1.0.0",
-   "id": "V6_AV1",
+   "id": "V6_VHEVC",
    "position": {
     "x": 500,
     "y": 250
    },
    "fpEnabled": true,
    "inputsDB": {
-    "codec": "av1"
+    "codec": "hevc"
+   }
+  },
+  {
+   "name": "Video is H264?",
+   "sourceRepo": "Community",
+   "pluginName": "checkVideoCodec",
+   "version": "1.0.0",
+   "id": "V6_VH264",
+   "position": {
+    "x": 350,
+    "y": 300
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "codec": "h264"
+   }
+  },
+  {
+   "name": "Has AAC track?",
+   "sourceRepo": "Community",
+   "pluginName": "checkAudioCodec",
+   "version": "1.0.0",
+   "id": "V6_AAC",
+   "position": {
+    "x": 650,
+    "y": 300
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "codec": "aac",
+    "checkBitrate": false
+   }
+  },
+  {
+   "name": "Has stereo track?",
+   "sourceRepo": "Community",
+   "pluginName": "checkChannelCount",
+   "version": "1.0.0",
+   "id": "V6_2CH",
+   "position": {
+    "x": 650,
+    "y": 360
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "channelCount": "2"
+   }
+  },
+  {
+   "name": "Already Compatible",
+   "sourceRepo": "Community",
+   "pluginName": "comment",
+   "version": "1.0.0",
+   "id": "V6_COMPAT",
+   "position": {
+    "x": 1200,
+    "y": 300
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "comment": "Vid\u00e9o HEVC/H264 + piste AAC st\u00e9r\u00e9o d\u00e9j\u00e0 pr\u00e9sente -> original conserv\u00e9"
    }
   },
   {
@@ -81,8 +142,8 @@
    "version": "1.0.0",
    "id": "V6_HDR",
    "position": {
-    "x": 500,
-    "y": 300
+    "x": 350,
+    "y": 400
    },
    "fpEnabled": true,
    "inputsDB": {}
@@ -117,8 +178,8 @@
    },
    "fpEnabled": true,
    "inputsDB": {
-    "greaterThan": 20,
-    "lessThan": 100
+    "greaterThan": 5,
+    "lessThan": 100000
    }
   },
   {
@@ -149,7 +210,7 @@
    },
    "fpEnabled": true,
    "inputsDB": {
-    "comment": "R\u00e9-encode non b\u00e9n\u00e9fique/suspect -> original conserv\u00e9"
+    "comment": "Sortie corrompue/suspecte (< 5 %) -> original conserv\u00e9"
    }
   },
   {
@@ -1772,7 +1833,7 @@
   {
    "source": "V6_MED",
    "sourceHandle": "1",
-   "target": "V6_AV1",
+   "target": "V6_VHEVC",
    "id": "e_med1",
    "type": "smoothstep",
    "animated": true
@@ -1786,18 +1847,66 @@
    "animated": true
   },
   {
-   "source": "V6_AV1",
+   "source": "V6_VHEVC",
    "sourceHandle": "1",
-   "target": "V6_SKIP",
-   "id": "e_av1skip",
+   "target": "V6_AAC",
+   "id": "e_vh1",
    "type": "smoothstep",
    "animated": true
   },
   {
-   "source": "V6_AV1",
+   "source": "V6_VHEVC",
+   "sourceHandle": "2",
+   "target": "V6_VH264",
+   "id": "e_vh2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_VH264",
+   "sourceHandle": "1",
+   "target": "V6_AAC",
+   "id": "e_v41",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_VH264",
    "sourceHandle": "2",
    "target": "V6_HDR",
-   "id": "e_av1cont",
+   "id": "e_v42",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_AAC",
+   "sourceHandle": "1",
+   "target": "V6_2CH",
+   "id": "e_ac1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_AAC",
+   "sourceHandle": "2",
+   "target": "V6_AUD",
+   "id": "e_ac2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_2CH",
+   "sourceHandle": "1",
+   "target": "V6_COMPAT",
+   "id": "e_2c1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_2CH",
+   "sourceHandle": "2",
+   "target": "V6_AUD",
+   "id": "e_2c2",
    "type": "smoothstep",
    "animated": true
   },
