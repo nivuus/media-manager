@@ -63,8 +63,12 @@ services:
       start_period: 45s
     volumes:
       - ./radarr:/config
-      - ${MOVIES_DIR}:/data/Movies
-      - ${DOWNLOADS_DIR}:/data/Downloads
+      # Single mount: hardlinks only work within one mount point. Binding
+      # Downloads and Movies separately makes link() fail with EXDEV even though
+      # both live on the same filesystem, so every import fell back to a full
+      # copy (13 min for 4.8 GB, and the space used twice until the 24h purge).
+      # Inner paths stay /data/Downloads and /data/Movies — nothing to reconfigure.
+      - ${MEDIA_ROOT}:/data
     logging:
       driver: json-file
       options:
@@ -91,64 +95,8 @@ services:
       start_period: 45s
     volumes:
       - ./sonarr:/config
-      - ${TV_DIR}:/data/TV Shows
-      - ${DOWNLOADS_DIR}:/data/Downloads
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-
-  radarr-4k:
-    image: linuxserver/radarr:latest
-    restart: always
-    depends_on:
-      - prowlarr
-    ports:
-      - 7879:7878
-    labels:
-      com.centurylinklabs.watchtower.enable: true
-    environment:
-      - PGID=${PGID}
-      - PUID=${PUID}
-      - TZ=${TZ}
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:7878/ping || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 45s
-    volumes:
-      - ./radarr-4k:/config
-      - ${MOVIES_DIR}:/data/Movies
-      - ${DOWNLOADS_DIR}:/data/Downloads
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-
-  sonarr-4k:
-    image: linuxserver/sonarr:latest
-    restart: always
-    depends_on:
-      - prowlarr
-    ports:
-      - 8990:8989
-    labels:
-      com.centurylinklabs.watchtower.enable: true
-    environment:
-      - PGID=${PGID}
-      - PUID=${PUID}
-      - TZ=${TZ}
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8989/ping || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 45s
-    volumes:
-      - ./sonarr-4k:/config
-      - ${TV_DIR}:/data/TV Shows
-      - ${DOWNLOADS_DIR}:/data/Downloads
+      # Single mount so hardlinks work — see the radarr service above.
+      - ${MEDIA_ROOT}:/data
     logging:
       driver: json-file
       options:
@@ -205,31 +153,6 @@ services:
       options:
         max-size: 10m
 
-  bazarr-4k:
-    image: linuxserver/bazarr:latest
-    restart: always
-    depends_on:
-      - prowlarr
-      - sonarr-4k
-      - radarr-4k
-      - openai-whisper-asr-webservice
-    ports:
-      - 6768:6767
-    labels:
-      com.centurylinklabs.watchtower.enable: true
-    environment:
-      - PGID=${PGID}
-      - PUID=${PUID}
-      - TZ=${TZ}
-    volumes:
-      - ./bazarr-4k:/config
-      - ${MOVIES_DIR}:/movies
-      - ${TV_DIR}:/tv
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-
   flaresolverr:
     image: alexfozor/flaresolverr:pr-1300-experimental
     labels:
@@ -277,9 +200,7 @@ services:
       com.centurylinklabs.watchtower.enable: true
     depends_on:
       - sonarr
-      - sonarr-4k
       - radarr
-      - radarr-4k
     environment:
       - TZ=${TZ}
       - PORT=5055
@@ -304,8 +225,14 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: true
     restart: always
-    cpus: 2
-    mem_limit: 2g
+    # Passé de 2 à 4 cœurs et de 2 à 4 Go le 2026-08-24 : le serveur mettait
+    # jusqu'à 106 s à répondre au POST /api/v2/update-node-relay (timeout node
+    # = 30 s), ce qui déconnectait les nodes 172 fois en 24 h. Un worker qui
+    # perd le serveur entre deux plugins échoue sur "Failed to load flow plugin
+    # handler" alors que son ffmpeg a rendu 0 — d'où des transcodeError sur des
+    # encodages réussis. Pic mémoire mesuré : 1,32 Go sur les 2 Go alloués.
+    cpus: 4
+    mem_limit: 4g
     devices:
       - /dev/dri:/dev/dri
     group_add:
@@ -334,7 +261,7 @@ services:
       - ./tdarr/server:/app/server
       - ./tdarr/configs:/app/configs
       - ${MEDIA_ROOT}:/media
-      - /media/backup/tdarr_cache:/temp
+      - /opt/nivuus/MediaManager/tdarr_cache:/temp
     logging:
       driver: json-file
       options:
@@ -344,7 +271,12 @@ services:
     image: ghcr.io/haveagitgat/tdarr_node:latest
     labels:
       com.centurylinklabs.watchtower.enable: true
-    restart: always
+    # `unless-stopped` et non `always`, pour la meme raison que le node NVENC :
+    # les hooks libvirt (/etc/libvirt/hooks/qemu.d/Windows/prepare/begin/10-cpu-confine.sh)
+    # arretent ce conteneur pendant que la VM Windows tourne, et `always` le
+    # ressusciterait au premier redemarrage du demon docker — en pleine partie,
+    # sans que rien ne le signale.
+    restart: unless-stopped
     depends_on:
       tdarr:
         condition: service_healthy
@@ -353,8 +285,17 @@ services:
     group_add:
       - "44"
       - "105"
-    cpus: 4
-    mem_limit: 4g
+    # Bridé de 4 à 2 cœurs le 2026-08-16 : quatre gels plateforme (04/08, 05/08,
+    # 07/08 + un démarrage qui n'a jamais abouti) sont tous survenus avec Tdarr
+    # en transcodage soutenu. Cause non prouvée — c'est une réduction de la
+    # charge soutenue pendant l'observation, pas un correctif. Revenir à 4 si
+    # les gels persistent (la charge serait alors innocentée).
+    cpus: 2
+    # mem_limit relevé de 4 à 10 Go le 2026-08-24 : l'OOM killer du cgroup a tué
+    # 4 tdarr-ffmpeg (journal kernel, oom_kill=4) sur des remux 4K — Skyfall,
+    # Casino Royale, Mourir peut attendre, Moonraker. anon-rss au moment du kill :
+    # 3,3 Go, soit la limite atteinte à elle seule par l'encodeur.
+    mem_limit: 10g
     environment:
       - TZ=${TZ}
       - PUID=${PUID}
@@ -371,7 +312,7 @@ services:
     volumes:
       - ./tdarr/configs:/app/configs
       - ./tdarr/bin:/app/bin:ro
-      - /media/backup/tdarr_cache:/temp
+      - /opt/nivuus/MediaManager/tdarr_cache:/temp
       - ${MEDIA_ROOT}:/media
     logging:
       driver: json-file
@@ -398,8 +339,13 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu, video]
-    cpus: 4
-    mem_limit: 4g
+    # Bridé de 4 à 2 cœurs le 2026-08-16, même raison que tdarr-node ci-dessus.
+    cpus: 2
+    # mem_limit relevé de 4 à 10 Go le 2026-08-24 : l'OOM killer du cgroup a tué
+    # 4 tdarr-ffmpeg (journal kernel, oom_kill=4) sur des remux 4K — Skyfall,
+    # Casino Royale, Mourir peut attendre, Moonraker. anon-rss au moment du kill :
+    # 3,3 Go, soit la limite atteinte à elle seule par l'encodeur.
+    mem_limit: 10g
     environment:
       - TZ=${TZ}
       - PUID=${PUID}
@@ -417,7 +363,7 @@ services:
     volumes:
       - ./tdarr/configs-nvenc:/app/configs
       - ./tdarr/bin:/app/bin:ro
-      - /media/backup/tdarr_cache:/temp
+      - /opt/nivuus/MediaManager/tdarr_cache:/temp
       - ${MEDIA_ROOT}:/media
     logging:
       driver: json-file
