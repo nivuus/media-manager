@@ -1,0 +1,43 @@
+apiVersion: nivuus.dev/v1
+name: media-manager
+version: 1.0.0
+label: "Mediatheque (Plex, *arr, Tdarr)"
+tier: userspace
+
+# Aucun `requires:` et aucun `claims:`, tous deux deliberement.
+#
+# `requires.features: [docker]` aurait ete le reflexe. C'est le precedent pose
+# par console avec firewalld qui tranche : un package declare ses PROPRES
+# dependances plutot que de se coupler a la liste de features du moteur, sinon
+# l'installation autonome sur une Debian ordinaire — que le contrat existe
+# precisement pour permettre — casse. Si l'operateur a coche la feature docker,
+# l'apt-get ci-dessous est un no-op idempotent.
+#
+# `claims: {gpu: exclusive}` aurait ete faux. Tdarr utilise /dev/dri (QSV Intel)
+# et un second node NVENC qui PARTAGE la RTX 4070 avec la VM Windows, via les
+# hooks libvirt du package console. Un claim exclusif ferait entrer les deux
+# packages en conflit dans check_conflicts() et les rendrait mutuellement
+# exclusifs — soit exactement l'inverse de la production.
+#
+# `requires.capabilities` : le vocabulaire du moteur (iommu, gpu-discrete,
+# nvme-dedicated, cpu-hybrid) ne contient rien que la mediatheque exige. Les
+# demander masquerait le package sur des machines ou il fonctionne.
+
+apt:
+  - docker.io
+  - docker-compose-v2
+  # requests et dotenv : les trois scripts de maintenance en dependent, et ils
+  # sont lances par des timers systemd des le premier boot.
+  - python3-requests
+  - python3-dotenv
+
+wizard:
+  questions: wizard.yaml
+
+# Pas de hook `resolve` : le package est userspace, il ne declare ni parametre
+# noyau, ni module, ni hugepage — il n'y a rien a resoudre. Et refuser une
+# machine sans /dev/dri serait faux : Plex et Tdarr transcodent en logiciel.
+# L'absence d'acceleration est traitee en install, par docker-compose.qsv.yml.
+hooks:
+  install: hooks/install.py
+  activate: hooks/activate.py
