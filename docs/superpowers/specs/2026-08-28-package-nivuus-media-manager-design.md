@@ -157,12 +157,12 @@ PUID/PGID sont figés à 1000/1000 : l'utilisateur primaire créé par l'install
 `RADARR_API_KEY` et consorts **n'existent pas** au moment du wizard : chaque
 service les génère à son premier démarrage. Elles sont donc écrites vides par
 `install.py`, puis **récoltées par `activate.py`** après le premier
-`compose up -d`, en lisant `ApiKey` dans le `config.xml` que Radarr, Sonarr,
-Prowlarr et Bazarr écrivent dans leur volume de configuration.
+`compose up -d`, en lisant `ApiKey` dans le `config.xml` que Radarr, Sonarr et
+Prowlarr écrivent dans leur volume de configuration.
 
 Sans cette récolte, les trois timers de maintenance tourneraient à vide
-indéfiniment — armés, annoncés, et silencieusement inertes. Tautulli et Seerr
-n'exposent pas leur clé de la même façon : elles restent vides et
+indéfiniment — armés, annoncés, et silencieusement inertes. Bazarr, Tautulli et
+Seerr ne rangent pas la leur dans un `config.xml` : elles restent vides et
 `media_cleanup.py` doit se dégrader proprement (**à vérifier à
 l'implémentation** — si le script lève au lieu de se dégrader, son timer n'est
 pas armé tant que la clé manque).
