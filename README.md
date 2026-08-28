@@ -102,6 +102,12 @@ Three systemd timers, shipped by the package and armed by the `activate` hook:
 | `media-manager-update-wanted.timer` | 07:00 | Searches a bounded, rotating slice of the missing backlog |
 | `media-manager-cleanup.timer` | 08:00 | Frees disk space, least-watched first, using Tautulli data |
 
+`media-manager-cleanup.timer` is armed **only once `TAUTULLI_API_KEY` is set**:
+`media_cleanup.py` exits 1 without it, so arming it on a fresh install would
+produce a failed unit every day at 08:00. That key is not harvestable — Tautulli
+does not write it to a `config.xml`. Fill it in `.env`, then re-run the
+`activate` hook (or link the timer by hand).
+
 ```bash
 systemctl list-timers 'media-manager-*'
 systemctl start media-manager-reset-error.service   # run one now

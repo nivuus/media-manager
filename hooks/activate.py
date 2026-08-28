@@ -3,8 +3,24 @@
 
 Trois choses, dans cet ordre, parce que chacune depend de la precedente.
 
-1. DEMARRER LA PILE. C'est ici, et pas en phase install, parce qu'il faut le
-   reseau : quinze images doivent etre tirees.
+1. DEMARRER LA PILE — mais SEULEMENT les services qui n'ont aucun conteneur.
+   C'est ici, et pas en phase install, parce qu'il faut le reseau : quinze
+   images doivent etre tirees.
+
+   UN `docker compose up -d` GLOBAL EST FAUX ICI, et l'erreur a ete commise :
+   il redemarre aussi les conteneurs ARRETES, or les deux nodes Tdarr sont
+   deliberement stoppes par les hooks libvirt du package console pendant une
+   partie — le node CPU pour rendre les coeurs a la VM, le node NVENC parce
+   qu'un conteneur tenant la carte empeche le bind vfio. Les relancer au
+   milieu d'une partie est exactement ce que ces hooks existent pour eviter.
+   Un service qui a deja un conteneur a donc un proprietaire ; cette phase ne
+   le touche pas.
+
+   Un echec partiel n'est pas fatal non plus : sur une machine ou la VM tient
+   la carte, tdarr-node-nvenc ne PEUT pas demarrer (le socket
+   nvidia-persistenced n'existe pas), et ce n'est pas une raison de declarer
+   l'installation de la mediatheque en echec. Seul un demarrage ou RIEN ne
+   tourne l'est.
 
 2. RECOLTER LES CLES API. Elles n'existent pas au moment du wizard — chaque
    service la genere a son premier demarrage, dans le config.xml de son
@@ -44,6 +60,17 @@ TIMERS = [
     "media-manager-update-wanted.timer",
     "media-manager-cleanup.timer",
 ]
+
+# Timers qu'on n'arme QUE si une variable du .env est renseignee.
+#
+# media_cleanup.py appelle check_api_keys(), qui sort en 1 quand
+# TAUTULLI_API_KEY est vide — et le timer le lance sans --status, donc la
+# verification s'applique. Cette cle n'est PAS recoltable : Tautulli ne
+# l'ecrit pas dans un config.xml, elle se saisit a la main. L'armer quand
+# meme donnerait une unite en echec tous les jours a 08:00, c'est-a-dire du
+# bruit qui apprend a ignorer les unites en echec. Elle s'arme d'elle-meme au
+# prochain passage de cette phase, une fois la cle renseignee.
+CONDITIONAL_TIMERS = {"media-manager-cleanup.timer": "TAUTULLI_API_KEY"}
 
 # Variable du .env -> config.xml qui porte la cle, relatif au deploiement.
 HARVEST = {
@@ -99,6 +126,29 @@ def fill_env(text, keys):
     return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
 
+def env_values(text):
+    """Les paires cle/valeur d'un .env, commentaires et lignes vides ignores."""
+    values = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key, _, value = stripped.partition("=")
+            values[key.strip()] = value.strip()
+    return values
+
+
+def timers_to_arm(values):
+    """Les timers a armer, au vu des variables presentes dans le .env.
+
+    Un timer conditionnel dont la variable est vide n'est pas arme : voir
+    CONDITIONAL_TIMERS. Il ne s'agit pas de le desactiver definitivement — la
+    phase se rejoue, et il s'arme des que la cle est renseignee.
+    """
+    return [timer for timer in TIMERS
+            if timer not in CONDITIONAL_TIMERS
+            or values.get(CONDITIONAL_TIMERS[timer])]
+
+
 def arm(root, unit, wants):
     """Lier une unite dans son repertoire .wants. Idempotent.
 
@@ -127,6 +177,29 @@ def compose(*args):
                           capture_output=True, text=True)
 
 
+def compose_services(*args):
+    """La liste de services rendue par une sous-commande compose. [] si echec."""
+    proc = compose(*args)
+    if proc.returncode != 0:
+        return []
+    return [name for name in (proc.stdout or "").split() if name]
+
+
+def services_to_start(declared, existing):
+    """Les services declares qui n'ont encore AUCUN conteneur.
+
+    Un service qui a deja un conteneur — meme arrete — a un proprietaire, et
+    ce n'est pas cette phase. Voir la regle 1 du docstring du module : les
+    hooks libvirt du package console arretent les deux nodes Tdarr pendant
+    une partie, et un `up -d` global les ressusciterait au milieu du jeu.
+
+    L'ordre de `declared` est conserve : compose respecte les depends_on de
+    toute facon, mais une liste stable rend la trace de progression lisible.
+    """
+    have = set(existing)
+    return [name for name in declared if name not in have]
+
+
 def start_units(units):
     """Recharger systemd et demarrer les unites. Ne leve jamais.
 
@@ -153,12 +226,24 @@ def main():
     root = args.root.rstrip("/") or "/"
 
     emit({"event": "progress", "pct": 10, "msg": "Demarrage de la mediatheque"})
-    proc = compose("up", "-d")
-    if proc.returncode != 0:
-        tail = (proc.stderr or "").strip().splitlines()
-        print(f"media-manager activate: docker compose up a echoue "
-              f"({tail[-1] if tail else 'pas de stderr'})", file=sys.stderr)
-        return 1
+    todo = services_to_start(compose_services("config", "--services"),
+                             compose_services("ps", "-a", "--services"))
+    if todo:
+        proc = compose("up", "-d", *todo)
+        if proc.returncode != 0:
+            tail = (proc.stderr or "").strip().splitlines()
+            emit({"event": "progress", "pct": 40,
+                  "msg": "Demarrage partiel : "
+                         + (tail[-1][:160] if tail else "sans detail")})
+            # Fatal seulement si RIEN ne tourne : un service qui ne peut pas
+            # demarrer (la carte est a la VM) n'invalide pas la mediatheque.
+            if not compose_services("ps", "--services"):
+                print("media-manager activate: aucun service n'a demarre",
+                      file=sys.stderr)
+                return 1
+    else:
+        emit({"event": "progress", "pct": 40,
+              "msg": "Tous les services ont deja un conteneur, rien a creer"})
 
     emit({"event": "progress", "pct": 50, "msg": "Recolte des cles API"})
     deadline = time.time() + HARVEST_TIMEOUT
@@ -186,9 +271,14 @@ def main():
     os.chmod(env_path, 0o600)
 
     emit({"event": "progress", "pct": 85, "msg": "Armement des timers"})
-    for timer in TIMERS:
+    armed = timers_to_arm(env_values(filled))
+    for skipped in [t for t in TIMERS if t not in armed]:
+        emit({"event": "progress", "pct": 85,
+              "msg": f"{skipped} non arme : {CONDITIONAL_TIMERS[skipped]} "
+                     "n'est pas renseigne dans le .env"})
+    for timer in armed:
         arm(root, timer, "timers.target.wants")
-    failed = start_units(TIMERS)
+    failed = start_units(armed)
     if failed:
         emit({"event": "progress", "pct": 95,
               "msg": "Timers lies mais non demarres, actifs au prochain "

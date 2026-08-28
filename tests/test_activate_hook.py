@@ -79,6 +79,48 @@ check("recolte vide sans effet", "PROWLARR_API_KEY=\n" in filled, True)
 check("commentaire preserve", filled.startswith("# en-tete\n"), True)
 check("ligne hors sujet preservee", "MEDIA_ROOT=/media/data" in filled, True)
 
+# --- Ne jamais ressusciter un service arrete par quelqu'un d'autre --------
+# La regression que ce bloc verrouille a ete commise en production le
+# 2026-08-28 : un `docker compose up -d` global a relance le node CPU de Tdarr
+# pendant une partie, alors que les hooks libvirt du package console venaient
+# de l'arreter pour rendre les coeurs a la VM.
+DECLARED = ["radarr", "sonarr", "tdarr", "tdarr-node", "tdarr-node-nvenc"]
+
+# Installation neuve : aucun conteneur, tout est a creer.
+check("installation neuve", activate.services_to_start(DECLARED, []), DECLARED)
+
+# Les deux nodes ont un conteneur, arrete par les hooks libvirt : on n'y
+# touche pas, meme s'ils ne tournent pas.
+check("nodes arretes non ressuscites",
+      activate.services_to_start(DECLARED, DECLARED), [])
+
+# Un service ajoute au compose est cree, sans reveiller les nodes.
+check("nouveau service seul",
+      activate.services_to_start(DECLARED + ["bazarr"], DECLARED), ["bazarr"])
+
+# L'ordre de declaration est conserve.
+check("ordre conserve",
+      activate.services_to_start(DECLARED, ["tdarr"]),
+      ["radarr", "sonarr", "tdarr-node", "tdarr-node-nvenc"])
+
+# --- Le timer de menage n'est arme qu'avec une cle Tautulli ---------------
+# media_cleanup.py sort en 1 quand TAUTULLI_API_KEY est vide, et le timer le
+# lance sans --status : l'armer sans la cle donnerait une unite en echec tous
+# les jours a 08:00. La cle n'est pas recoltable, elle se saisit a la main.
+check("les trois timers avec la cle",
+      activate.timers_to_arm({"TAUTULLI_API_KEY": "une-cle"}),
+      activate.TIMERS)
+check("menage non arme sans la cle",
+      activate.timers_to_arm({"TAUTULLI_API_KEY": ""}),
+      ["media-manager-reset-error.timer", "media-manager-update-wanted.timer"])
+check("menage non arme si la cle est absente",
+      activate.timers_to_arm({}),
+      ["media-manager-reset-error.timer", "media-manager-update-wanted.timer"])
+
+check("lecture d'un .env",
+      activate.env_values("# note\nA=1\n\nB = deux \nC\n"),
+      {"A": "1", "B": "deux"})
+
 # --- Armement des timers par symlink --------------------------------------
 with tempfile.TemporaryDirectory() as root:
     units = pathlib.Path(root) / "etc/systemd/system"
