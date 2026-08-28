@@ -1,3 +1,8 @@
+# Le nom de projet est epingle : il derivait du nom du repertoire, et le
+# renommage du repertoire de deploiement aurait orpheline les douze
+# conteneurs en cours. La valeur est celle que la production utilise
+# deja, pour que le renommage ne recree rien.
+name: mediamanager
 
 services:
   rdtclient:
@@ -233,11 +238,6 @@ services:
     # encodages réussis. Pic mémoire mesuré : 1,32 Go sur les 2 Go alloués.
     cpus: 4
     mem_limit: 4g
-    devices:
-      - /dev/dri:/dev/dri
-    group_add:
-      - "44"
-      - "105"
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8266/api/v2/status || exit 1"]
       interval: 30s
@@ -261,7 +261,7 @@ services:
       - ./tdarr/server:/app/server
       - ./tdarr/configs:/app/configs
       - ${MEDIA_ROOT}:/media
-      - /opt/nivuus/MediaManager/tdarr_cache:/temp
+      - ./tdarr_cache:/temp
     logging:
       driver: json-file
       options:
@@ -280,11 +280,6 @@ services:
     depends_on:
       tdarr:
         condition: service_healthy
-    devices:
-      - /dev/dri:/dev/dri
-    group_add:
-      - "44"
-      - "105"
     # Bridé de 4 à 2 cœurs le 2026-08-16 : quatre gels plateforme (04/08, 05/08,
     # 07/08 + un démarrage qui n'a jamais abouti) sont tous survenus avec Tdarr
     # en transcodage soutenu. Cause non prouvée — c'est une réduction de la
@@ -312,7 +307,7 @@ services:
     volumes:
       - ./tdarr/configs:/app/configs
       - ./tdarr/bin:/app/bin:ro
-      - /opt/nivuus/MediaManager/tdarr_cache:/temp
+      - ./tdarr_cache:/temp
       - ${MEDIA_ROOT}:/media
     logging:
       driver: json-file
@@ -329,6 +324,12 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: true
     restart: unless-stopped
+    # Le second node d'encodage partage la RTX 4070 avec la VM Windows du
+    # package console. Il n'a de sens que sur une machine qui a une carte
+    # NVIDIA : active par COMPOSE_PROFILES=nvenc, ecrit par le hook install
+    # quand la reponse `nvenc_node` du wizard est vraie.
+    profiles:
+      - nvenc
     depends_on:
       tdarr:
         condition: service_healthy
@@ -363,7 +364,7 @@ services:
     volumes:
       - ./tdarr/configs-nvenc:/app/configs
       - ./tdarr/bin:/app/bin:ro
-      - /opt/nivuus/MediaManager/tdarr_cache:/temp
+      - ./tdarr_cache:/temp
       - ${MEDIA_ROOT}:/media
     logging:
       driver: json-file
@@ -396,8 +397,6 @@ services:
     network_mode: host
     cpus: 6
     mem_limit: 12g
-    devices:
-      - /dev/dri:/dev/dri
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -418,8 +417,6 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: true
     restart: unless-stopped
-    devices:
-      - /dev/dri:/dev/dri
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
