@@ -25,16 +25,20 @@ nodes, edges = [], []
 def add(n): nodes.append(n)
 def link(s, h, t, i): edges.append(edge(s, h, t, i))
 
+# forceEncoding=True INDISPENSABLE : le plugin ne ré-encode que si forceEncoding OU
+# codec_name != cible (ffmpegCommandSetVideoEncoder l.240). Sans ça, une source déjà
+# HEVC routée ici par le garde-fou bitrate serait COPIÉE (pas ré-encodée) -> aucun gain.
+# Tout fichier qui atteint la chaîne d'encodage est destiné au ré-encode, donc sûr.
 QSV_ENC = {"outputCodec": "hevc", "ffmpegPresetEnabled": False, "ffmpegQualityEnabled": True,
            "ffmpegQuality": "{{args.variables.user.quality}}", "hardwareEncoding": True,
-           "hardwareType": "qsv", "hardwareDecoding": False, "forceEncoding": False}
+           "hardwareType": "qsv", "hardwareDecoding": False, "forceEncoding": True}
 # NVENC (RTX 4070, node tdarr-node-nvenc). Le plugin émet `-global_quality` pour
 # hevc_qsv mais `-qp` pour tout autre encodeur GPU : l'échelle n'est donc PAS la même
 # que celle du QSV, d'où NVQ ci-dessous. On laisse le plugin gérer le débit (constqp) :
 # mesuré plus efficace que `-rc vbr -cq` (à SSIM 0.9861 : qp20 = 28.5 Mo vs cq26 = 33.6 Mo).
 NVENC_ENC = {"outputCodec": "hevc", "ffmpegPresetEnabled": False, "ffmpegQualityEnabled": True,
              "ffmpegQuality": "{{args.variables.user.quality}}", "hardwareEncoding": True,
-             "hardwareType": "nvenc", "hardwareDecoding": False, "forceEncoding": False}
+             "hardwareType": "nvenc", "hardwareDecoding": False, "forceEncoding": True}
 CPU_ENC = {"outputCodec": "hevc", "ffmpegPresetEnabled": True, "ffmpegPreset": "medium",
            "ffmpegQualityEnabled": True, "ffmpegQuality": "{{args.variables.user.quality}}",
            "hardwareEncoding": False, "hardwareType": "auto", "hardwareDecoding": False,
@@ -135,6 +139,19 @@ add(node("V6_AAC", "Has AAC track?", "checkAudioCodec",
 add(node("V6_2CH", "Has stereo track?", "checkChannelCount", inputs={"channelCount": "2"}, x=650, y=360))
 add(node("V6_COMPAT", "Already Compatible", "comment",
          inputs={"comment": "Vidéo HEVC/H264 + piste AAC stéréo déjà présente -> original conservé"}, x=1200, y=300))
+# --- garde-fou BITRATE (compat-first MAIS on ré-encode les fichiers obèses) ---
+# Un codec compatible (HEVC/H264) n'est PLUS gardé aveuglément : s'il est trop gros
+# pour sa résolution (REMUX 4K à 50-80 Mbps, BluRay 1080p lourds), on le ré-encode
+# quand même vers la cible qualité, sinon on le conserve tel quel (Path A/B).
+# Seuils GLOBAUX (bit_rate = débit overall, audio inclus ; vérifié sur Interstellar 58,9 Mbps) :
+#   4K/1440p > 35 Mbps -> ré-encode | 1080p > 20 Mbps -> ré-encode | 720p/SD/other -> conservé.
+# checkOverallBitrate : sortie 1 = DANS la plage [0, seuil] (sous le seuil, on garde),
+# sortie 2 = hors plage (au-dessus, on ré-encode). bit_rate manquant (0) -> sortie 1 = gardé.
+add(node("V6_BRES", "Res for bitrate guard", "checkVideoResolution", x=480, y=430))
+add(node("V6_BR1080", "1080p bitrate > 20 Mbps?", "checkOverallBitrate",
+         inputs={"unit": "mbps", "greaterThan": 0, "lessThan": 20}, x=360, y=500))
+add(node("V6_BR4K", "4K bitrate > 35 Mbps?", "checkOverallBitrate",
+         inputs={"unit": "mbps", "greaterThan": 0, "lessThan": 35}, x=600, y=500))
 add(node("V6_HDR", "Check HDR Video", "checkHdr", x=350, y=400))
 # NB : le plugin Local dvReencodeQsv est retiré du flow actif (bug CLI non testé
 # faisait crasher les workers). HDR/DV -> chaîne HDR QSV (plugins Community
@@ -168,10 +185,21 @@ sdr = encode_chain("S", "", 1600)
 link("V6_IN", 1, "V6_HC", "e_in")
 link("V6_HC", 1, "V6_MED", "e_hc1"); link("V6_HC", 2, "V6_SKIP", "e_hc2")
 link("V6_MED", 1, "V6_VHEVC", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
-# vidéo HEVC ? -> oui : vérifier l'audio ; non : tester H264
-link("V6_VHEVC", 1, "V6_AAC", "e_vh1"); link("V6_VHEVC", 2, "V6_VH264", "e_vh2")
-# vidéo H264 ? -> oui : vérifier l'audio ; non (ni HEVC ni H264) : ré-encoder (Path C)
-link("V6_VH264", 1, "V6_AAC", "e_v41"); link("V6_VH264", 2, "V6_HDR", "e_v42")
+# vidéo HEVC ? -> oui : garde-fou bitrate ; non : tester H264
+link("V6_VHEVC", 1, "V6_BRES", "e_vh1"); link("V6_VHEVC", 2, "V6_VH264", "e_vh2")
+# vidéo H264 ? -> oui : garde-fou bitrate ; non (ni HEVC ni H264) : ré-encoder (Path C)
+link("V6_VH264", 1, "V6_BRES", "e_v41"); link("V6_VH264", 2, "V6_HDR", "e_v42")
+# garde-fou bitrate : split résolution -> check du débit -> sous seuil = audio compat, au-dessus = ré-encode
+# checkVideoResolution handles : 1=480p 2=576p 3=720p 4=1080p 5=1440p 6=4KUHD 7=DCI4K 8=8KUHD 9=other
+link("V6_BRES", 1, "V6_AAC", "e_br1"); link("V6_BRES", 2, "V6_AAC", "e_br2")
+link("V6_BRES", 3, "V6_AAC", "e_br3")                 # 720p -> jamais ré-encodé
+link("V6_BRES", 4, "V6_BR1080", "e_br4")              # 1080p -> check 20 Mbps
+link("V6_BRES", 5, "V6_BR4K", "e_br5")                # 1440p -> seuil 4K (35 Mbps)
+link("V6_BRES", 6, "V6_BR4K", "e_br6"); link("V6_BRES", 7, "V6_BR4K", "e_br7")
+link("V6_BRES", 8, "V6_BR4K", "e_br8"); link("V6_BRES", 9, "V6_AAC", "e_br9")
+# sortie 1 = sous le seuil (on garde -> audio compat) ; sortie 2 = au-dessus (on ré-encode)
+link("V6_BR1080", 1, "V6_AAC", "e_b10a"); link("V6_BR1080", 2, "V6_HDR", "e_b10b")
+link("V6_BR4K", 1, "V6_AAC", "e_b4a"); link("V6_BR4K", 2, "V6_HDR", "e_b4b")
 # a une piste AAC ? -> oui : vérifier qu'il y a du stéréo ; non : ajouter la piste (Path B)
 link("V6_AAC", 1, "V6_2CH", "e_ac1"); link("V6_AAC", 2, "V6_AUD", "e_ac2")
 # a une piste 2 canaux ? -> oui : déjà compatible, on garde ; non : ajouter la piste (Path B)

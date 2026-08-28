@@ -136,6 +136,53 @@
    }
   },
   {
+   "name": "Res for bitrate guard",
+   "sourceRepo": "Community",
+   "pluginName": "checkVideoResolution",
+   "version": "1.0.0",
+   "id": "V6_BRES",
+   "position": {
+    "x": 480,
+    "y": 430
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "1080p bitrate > 20 Mbps?",
+   "sourceRepo": "Community",
+   "pluginName": "checkOverallBitrate",
+   "version": "1.0.0",
+   "id": "V6_BR1080",
+   "position": {
+    "x": 360,
+    "y": 500
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "unit": "mbps",
+    "greaterThan": 0,
+    "lessThan": 20
+   }
+  },
+  {
+   "name": "4K bitrate > 35 Mbps?",
+   "sourceRepo": "Community",
+   "pluginName": "checkOverallBitrate",
+   "version": "1.0.0",
+   "id": "V6_BR4K",
+   "position": {
+    "x": 600,
+    "y": 500
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "unit": "mbps",
+    "greaterThan": 0,
+    "lessThan": 35
+   }
+  },
+  {
    "name": "Check HDR Video",
    "sourceRepo": "Community",
    "pluginName": "checkHdr",
@@ -407,7 +454,7 @@
     "hardwareEncoding": true,
     "hardwareType": "nvenc",
     "hardwareDecoding": false,
-    "forceEncoding": false
+    "forceEncoding": true
    }
   },
   {
@@ -535,7 +582,7 @@
     "hardwareEncoding": true,
     "hardwareType": "qsv",
     "hardwareDecoding": false,
-    "forceEncoding": false
+    "forceEncoding": true
    }
   },
   {
@@ -814,7 +861,7 @@
     "hardwareEncoding": true,
     "hardwareType": "nvenc",
     "hardwareDecoding": false,
-    "forceEncoding": false
+    "forceEncoding": true
    }
   },
   {
@@ -942,7 +989,7 @@
     "hardwareEncoding": true,
     "hardwareType": "qsv",
     "hardwareDecoding": false,
-    "forceEncoding": false
+    "forceEncoding": true
    }
   },
   {
@@ -1849,7 +1896,7 @@
   {
    "source": "V6_VHEVC",
    "sourceHandle": "1",
-   "target": "V6_AAC",
+   "target": "V6_BRES",
    "id": "e_vh1",
    "type": "smoothstep",
    "animated": true
@@ -1865,7 +1912,7 @@
   {
    "source": "V6_VH264",
    "sourceHandle": "1",
-   "target": "V6_AAC",
+   "target": "V6_BRES",
    "id": "e_v41",
    "type": "smoothstep",
    "animated": true
@@ -1875,6 +1922,110 @@
    "sourceHandle": "2",
    "target": "V6_HDR",
    "id": "e_v42",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BRES",
+   "sourceHandle": "1",
+   "target": "V6_AAC",
+   "id": "e_br1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BRES",
+   "sourceHandle": "2",
+   "target": "V6_AAC",
+   "id": "e_br2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BRES",
+   "sourceHandle": "3",
+   "target": "V6_AAC",
+   "id": "e_br3",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BRES",
+   "sourceHandle": "4",
+   "target": "V6_BR1080",
+   "id": "e_br4",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BRES",
+   "sourceHandle": "5",
+   "target": "V6_BR4K",
+   "id": "e_br5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BRES",
+   "sourceHandle": "6",
+   "target": "V6_BR4K",
+   "id": "e_br6",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BRES",
+   "sourceHandle": "7",
+   "target": "V6_BR4K",
+   "id": "e_br7",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BRES",
+   "sourceHandle": "8",
+   "target": "V6_BR4K",
+   "id": "e_br8",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BRES",
+   "sourceHandle": "9",
+   "target": "V6_AAC",
+   "id": "e_br9",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BR1080",
+   "sourceHandle": "1",
+   "target": "V6_AAC",
+   "id": "e_b10a",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BR1080",
+   "sourceHandle": "2",
+   "target": "V6_HDR",
+   "id": "e_b10b",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BR4K",
+   "sourceHandle": "1",
+   "target": "V6_AAC",
+   "id": "e_b4a",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_BR4K",
+   "sourceHandle": "2",
+   "target": "V6_HDR",
+   "id": "e_b4b",
    "type": "smoothstep",
    "animated": true
   },
