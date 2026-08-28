@@ -1,0 +1,10 @@
+[Unit]
+Description=MediaManager — recherche quotidienne des manquants (07:00)
+
+[Timer]
+OnCalendar=*-*-* 07:00:00
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
