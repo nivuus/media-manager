@@ -78,6 +78,21 @@ for name in ("tdarr", "tdarr-node"):
 check("profil du node NVENC",
       main["services"]["tdarr-node-nvenc"].get("profiles"), ["nvenc"])
 
+# SABnzbd est optionnel de la meme facon : eteint sur l'hote de reference,
+# rallumable en ajoutant `usenet` a COMPOSE_PROFILES sans toucher au package.
+check("profil de SABnzbd",
+      main["services"]["sabnzbd"].get("profiles"), ["usenet"])
+
+# Un service derriere un profil ne doit etre la cible d'aucun depends_on : un
+# service actif qui depend d'un service non selectionne fait echouer le
+# demarrage entier.
+optional = {name for name, svc in main["services"].items() if svc.get("profiles")}
+for name, svc in main["services"].items():
+    deps = svc.get("depends_on") or {}
+    for dep in (deps if isinstance(deps, (list, dict)) else []):
+        check(f"{name} ne depend pas du service optionnel {dep}",
+              dep in optional, False)
+
 # Toute variable que le wizard fait ecrire dans le .env doit etre CONSOMMEE
 # par un service. PLEX_CLAIM ne l'etait pas : la question etait posee, la
 # valeur ecrite, et aucun conteneur ne la lisait — un rattachement Plex

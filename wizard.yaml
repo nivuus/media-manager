@@ -24,6 +24,11 @@
   label: "Second node de transcodage Tdarr sur GPU NVIDIA (NVENC)"
   default: false
 
+- key: usenet
+  type: bool
+  label: "Client Usenet SABnzbd (necessite un fournisseur, un indexeur Newznab et sa declaration dans Radarr/Sonarr)"
+  default: false
+
 - key: plex_claim
   type: secret
   label: "Jeton de rattachement Plex (claim.plex.tv, facultatif)"

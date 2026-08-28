@@ -30,6 +30,17 @@ services:
   sabnzbd:
     image: linuxserver/sabnzbd:latest
     restart: always
+    # Client Usenet, optionnel : active par COMPOSE_PROFILES=usenet, ecrit par
+    # le hook install quand la reponse `usenet` du wizard est vraie.
+    #
+    # Eteint sur l'hote de reference depuis le 2026-08-28. La chaine n'a jamais
+    # ete terminee : zero telechargement dans son historique, aucun indexeur
+    # Newznab dans Prowlarr, et il n'est declare comme client de telechargement
+    # ni dans Radarr ni dans Sonarr. Le rallumer ne suffit donc PAS — il faut
+    # aussi un fournisseur Usenet valide, un indexeur Newznab, et le declarer
+    # des deux cotes. Sa configuration est conservee dans ./sabnzbd.
+    profiles:
+      - usenet
     labels:
       com.centurylinklabs.watchtower.enable: true
     environment:

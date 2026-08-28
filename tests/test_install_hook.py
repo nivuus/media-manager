@@ -71,6 +71,7 @@ ANSWERS = {
     "transcode_dir": "/srv/transcode",
     "timezone": "Europe/Paris",
     "nvenc_node": True,
+    "usenet": False,
     "plex_claim": "claim-abc",
 }
 
@@ -112,7 +113,7 @@ with tempfile.TemporaryDirectory() as root:
     # Les GID viennent du /etc/group de la CIBLE, pas de l'hote qui installe.
     check("VIDEO_GID lu sur la cible", values["VIDEO_GID"], "44")
     check("RENDER_GID lu sur la cible", values["RENDER_GID"], "106")
-    check("profil NVENC actif", values["COMPOSE_PROFILES"], "nvenc")
+    check("profil NVENC seul", values["COMPOSE_PROFILES"], "nvenc")
     check("secret reporte", values["PLEX_CLAIM"], "claim-abc")
     # Les cles API n'existent pas encore : chaque service la genere a son
     # premier demarrage. La phase activate les recoltera.
@@ -136,6 +137,22 @@ with tempfile.TemporaryDirectory() as root:
     # fois qu'il y a une pile a maintenir.
     check("aucun timer arme a l'install",
           (units / "timers.target.wants").exists(), False)
+
+# --- COMPOSE_PROFILES reflete les deux reponses optionnelles --------------
+# docker compose lit une liste separee par des virgules ; une chaine vide
+# n'active aucun profil, donc ni le node NVENC ni SABnzbd ne demarrent.
+for nvenc, usenet, expected in (
+        (True, True, "nvenc,usenet"),
+        (False, True, "usenet"),
+        (False, False, ""),
+):
+    with tempfile.TemporaryDirectory() as root:
+        fake_group_file(root)
+        proc = run(root, dict(ANSWERS, nvenc_node=nvenc, usenet=usenet))
+        check(f"profils (nvenc={nvenc}, usenet={usenet}): code", proc.returncode, 0)
+        values = env_values(pathlib.Path(root) / DEST_REL / ".env")
+        check(f"profils (nvenc={nvenc}, usenet={usenet})",
+              values["COMPOSE_PROFILES"], expected)
 
 # --- Le .env existant n'est jamais ecrase ---------------------------------
 with tempfile.TemporaryDirectory() as root:

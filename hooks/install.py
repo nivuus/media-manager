@@ -152,6 +152,7 @@ def main():
     # au milieu d'une copie.
     try:
         nvenc = bool_answer(answers, "nvenc_node")
+        usenet = bool_answer(answers, "usenet")
         media_root = text_answer(answers, "media_root", "/media/data").rstrip("/")
         transcode = text_answer(answers, "transcode_dir",
                                 "/media/backup/.transcode")
@@ -179,6 +180,14 @@ def main():
         emit({"event": "progress", "pct": 55,
               "msg": f"{RENDER_NODES} absent : transcodage logiciel"})
 
+    # docker compose lit COMPOSE_PROFILES comme une liste separee par des
+    # virgules ; une chaine vide n'active aucun profil.
+    profiles = []
+    if nvenc:
+        profiles.append("nvenc")
+    if usenet:
+        profiles.append("usenet")
+
     rendered = render_env({
         "TZ": timezone,
         "PUID": "1000",
@@ -189,7 +198,7 @@ def main():
         "TV_DIR": f"{media_root}/TV Shows",
         "TRANSCODE_DIR": transcode,
         "COMPOSE_FILE": compose_files,
-        "COMPOSE_PROFILES": "nvenc" if nvenc else "",
+        "COMPOSE_PROFILES": ",".join(profiles),
         "VIDEO_GID": str(group_gid(root, "video")),
         "RENDER_GID": str(group_gid(root, "render")),
         "PLEX_CLAIM": plex_claim,

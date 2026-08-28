@@ -131,13 +131,28 @@ python3 media_cleanup.py --threshold 15  # custom threshold (15% free)
 | **Prowlarr** | 9696 | Indexer manager |
 | **FlareSolverr** | — | Cloudflare bypass for indexers |
 | **RDTClient** | 6500 | AllDebrid download client |
-| **SABnzbd** | 8080 | Usenet download client |
+| **SABnzbd** | 8086 | Usenet download client, profile `usenet` (off by default) |
 | **Radarr** | 7878 | Movie management |
 | **Sonarr** | 8989 | TV show management |
 | **Bazarr** | 6767 | Subtitle automation |
 | **Tdarr** | 8265-8266 | Transcoding server |
 | **Tdarr-Node** | — | QSV transcoding worker |
 | **Tdarr-Node-NVENC** | — | NVIDIA worker, profile `nvenc` |
+
+### Optional services
+
+Two services sit behind Compose profiles and are off unless asked for.
+`COMPOSE_PROFILES` in `.env` is a comma-separated list — `nvenc,usenet` turns
+both on — and the `install` hook writes it from the wizard answers.
+
+**SABnzbd is off on the reference host since 2026-08-28.** Its chain was never
+finished: zero downloads in its history, no Newznab indexer in Prowlarr, and it
+is registered as a download client in neither Radarr nor Sonarr — its Usenet
+provider rejects the stored credentials on top of that. Turning it back on is
+therefore **not** a matter of flipping the profile alone; it needs a valid
+provider account, a Newznab indexer, and a download-client entry on both sides.
+Its configuration is kept in `./sabnzbd` so none of the rest has to be redone.
+
 | **Plex** | 32400 | Media server (host network) |
 | **Tautulli** | 8181 | Plex monitoring and statistics |
 | **Whisper ASR** | 9000 | AI subtitle generation |
