@@ -9,7 +9,7 @@ service.
 TROIS REGLES PORTENT LE RESTE.
 
 1. LE .env N'EST JAMAIS ECRASE. En production il porte les cles API reelles,
-   les identifiants YGG et le jeton TMDb. Une reinstallation qui le
+   et le jeton de rattachement Plex. Une reinstallation qui le
    reecrirait detruirait tout cela sans bruit — et cette phase tourne aussi
    sur une machine deja installee (la bascule de production passe par
    `install.py --root /`). Les cles absentes sont AJOUTEES, les presentes ne
@@ -157,9 +157,6 @@ def main():
                                 "/media/backup/.transcode")
         timezone = text_answer(answers, "timezone", "Europe/Paris")
         plex_claim = text_answer(answers, "plex_claim")
-        ygg_user = text_answer(answers, "ygg_username")
-        ygg_pass = text_answer(answers, "ygg_password")
-        tmdb = text_answer(answers, "tmdb_token")
     except ValueError as exc:
         print(f"media-manager install: {exc}", file=sys.stderr)
         return 1
@@ -195,9 +192,6 @@ def main():
         "COMPOSE_PROFILES": "nvenc" if nvenc else "",
         "VIDEO_GID": str(group_gid(root, "video")),
         "RENDER_GID": str(group_gid(root, "render")),
-        "YGG_USERNAME": ygg_user,
-        "YGG_PASSWORD": ygg_pass,
-        "TMDB_TOKEN": tmdb,
         "PLEX_CLAIM": plex_claim,
     })
 
@@ -209,7 +203,7 @@ def main():
               "msg": ".env existant conserve, variables manquantes ajoutees"})
     with open(env_path, "w") as fh:
         fh.write(rendered)
-    # 0600 : identifiants YGG, jeton TMDb, jeton Plex, et bientot les cles API.
+    # 0600 : le jeton de rattachement Plex, et bientot les cles API.
     os.chmod(env_path, 0o600)
 
     emit({"event": "progress", "pct": 85, "msg": "Unites de maintenance posees"})

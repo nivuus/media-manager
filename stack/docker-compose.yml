@@ -173,31 +173,6 @@ services:
       options:
         max-size: 10m
 
-  ygege:
-    image: uwucode/ygege:latest
-    labels:
-      com.centurylinklabs.watchtower.enable: true
-    restart: unless-stopped
-    environment:
-      - YGG_USERNAME=${YGG_USERNAME}
-      - YGG_PASSWORD=${YGG_PASSWORD}
-      - YGG_DOMAIN=www.yggtorrent.support
-      - TMDB_TOKEN=${TMDB_TOKEN}
-      - LOG_LEVEL=info
-      - TZ=${TZ}
-    volumes:
-      - ./ygege:/config
-    healthcheck:
-      test: ["CMD-SHELL", "curl --fail http://localhost:8715/health || exit 1"]
-      interval: 1m30s
-      timeout: 20s
-      retries: 3
-      start_period: 30s
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-
   seerr:
     image: ghcr.io/seerr-team/seerr:latest
     init: true
@@ -402,6 +377,10 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
       - VERSION=docker
+      # Jeton de rattachement claim.plex.tv, ecrit par le hook install
+      # depuis la reponse du wizard. Vide = serveur non rattache, a
+      # faire depuis l'interface.
+      - PLEX_CLAIM=${PLEX_CLAIM}
     volumes:
       - ./plex:/config
       - ${MOVIES_DIR}:/media/data/Movies

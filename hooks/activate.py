@@ -4,7 +4,7 @@
 Trois choses, dans cet ordre, parce que chacune depend de la precedente.
 
 1. DEMARRER LA PILE — mais SEULEMENT les services qui n'ont aucun conteneur.
-   C'est ici, et pas en phase install, parce qu'il faut le reseau : quinze
+   C'est ici, et pas en phase install, parce qu'il faut le reseau : quatorze
    images doivent etre tirees.
 
    UN `docker compose up -d` GLOBAL EST FAUX ICI, et l'erreur a ete commise :

@@ -78,7 +78,7 @@ keys = [q.get("key") for q in questions]
 check("cles uniques", len(keys), len(set(keys)))
 check("cles attendues", sorted(keys),
       sorted(["media_root", "transcode_dir", "timezone", "nvenc_node",
-              "plex_claim", "ygg_username", "ygg_password", "tmdb_token"]))
+              "plex_claim"]))
 
 for question in questions:
     key = question.get("key")

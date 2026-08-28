@@ -10,6 +10,7 @@ une valeur qui varie selon la version de Debian.
 Run: python3 tests/test_compose_portable.py
 """
 import pathlib
+import re
 import sys
 
 import yaml
@@ -76,6 +77,29 @@ for name in ("tdarr", "tdarr-node"):
 # Le node NVENC est optionnel : il ne demarre que sur profil.
 check("profil du node NVENC",
       main["services"]["tdarr-node-nvenc"].get("profiles"), ["nvenc"])
+
+# Toute variable que le wizard fait ecrire dans le .env doit etre CONSOMMEE
+# par un service. PLEX_CLAIM ne l'etait pas : la question etait posee, la
+# valeur ecrite, et aucun conteneur ne la lisait — un rattachement Plex
+# silencieusement sans effet. Une variable orpheline est pire qu'une variable
+# absente, parce qu'elle promet quelque chose.
+WIZARD_VARS = ("MEDIA_ROOT", "DOWNLOADS_DIR", "MOVIES_DIR", "TV_DIR",
+               "TRANSCODE_DIR", "TZ", "PUID", "PGID", "PLEX_CLAIM",
+               "VIDEO_GID", "RENDER_GID")
+referenced = MAIN.read_text() + QSV.read_text()
+for var in WIZARD_VARS:
+    check(f"{var} consomme par un service",
+          "${" + var + "}" in referenced, True)
+
+# Reciproquement, le gabarit doit declarer tout ce que le compose interpole,
+# sinon docker compose substitue une chaine vide sans le dire.
+template = (STACK / "env.template").read_text()
+declared = {line.split("=", 1)[0].strip()
+            for line in template.splitlines()
+            if "=" in line and not line.strip().startswith("#")}
+interpolated = set(re.findall(r"\$\{([A-Z_][A-Z0-9_]*)\}", referenced))
+check("aucune variable interpolee absente du gabarit",
+      sorted(interpolated - declared), [])
 
 if failures:
     print("\n".join(failures))

@@ -130,7 +130,6 @@ python3 media_cleanup.py --threshold 15  # custom threshold (15% free)
 | **Seerr** | 5055 | Request portal (localhost only) |
 | **Prowlarr** | 9696 | Indexer manager |
 | **FlareSolverr** | — | Cloudflare bypass for indexers |
-| **Ygege** | — | YGG indexer integration |
 | **RDTClient** | 6500 | AllDebrid download client |
 | **SABnzbd** | 8080 | Usenet download client |
 | **Radarr** | 7878 | Movie management |

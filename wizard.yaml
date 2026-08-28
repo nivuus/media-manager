@@ -27,16 +27,3 @@
 - key: plex_claim
   type: secret
   label: "Jeton de rattachement Plex (claim.plex.tv, facultatif)"
-
-- key: ygg_username
-  type: texte
-  label: "Identifiant YGG pour l'indexeur Ygege (facultatif)"
-  default: ""
-
-- key: ygg_password
-  type: secret
-  label: "Mot de passe YGG (facultatif)"
-
-- key: tmdb_token
-  type: secret
-  label: "Jeton API TMDb, requis par Ygege (facultatif)"

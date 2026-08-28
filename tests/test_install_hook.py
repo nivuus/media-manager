@@ -7,7 +7,7 @@ prouverait rien a son sujet.
 
 Les deux cas qui ont motive le plus de code sont ici : un .env existant n'est
 JAMAIS ecrase (en production il porte les cles API reelles et les identifiants
-YGG), et une reponse booleenne recue sous forme de chaine est refusee, jamais
+Plex), et une reponse booleenne recue sous forme de chaine est refusee, jamais
 convertie — bool("false") vaut True en Python, et ce piege a deja ete rencontre
 deux fois dans ce projet.
 
@@ -72,9 +72,6 @@ ANSWERS = {
     "timezone": "Europe/Paris",
     "nvenc_node": True,
     "plex_claim": "claim-abc",
-    "ygg_username": "moi",
-    "ygg_password": "secret",
-    "tmdb_token": "jeton",
 }
 
 # --- Installation nominale ------------------------------------------------
@@ -99,8 +96,8 @@ with tempfile.TemporaryDirectory() as root:
 
     env_path = dest / ".env"
     check(".env ecrit", env_path.is_file(), True)
-    # 0600 : le fichier porte plex_claim, ygg_password et tmdb_token en clair,
-    # et recevra les cles API a la phase activate.
+    # 0600 : le fichier porte plex_claim en clair, et recevra les cles API
+    # a la phase activate.
     check(".env en 0600",
           stat.S_IMODE(env_path.stat().st_mode), 0o600)
 
@@ -116,7 +113,7 @@ with tempfile.TemporaryDirectory() as root:
     check("VIDEO_GID lu sur la cible", values["VIDEO_GID"], "44")
     check("RENDER_GID lu sur la cible", values["RENDER_GID"], "106")
     check("profil NVENC actif", values["COMPOSE_PROFILES"], "nvenc")
-    check("secrets reportes", values["TMDB_TOKEN"], "jeton")
+    check("secret reporte", values["PLEX_CLAIM"], "claim-abc")
     # Les cles API n'existent pas encore : chaque service la genere a son
     # premier demarrage. La phase activate les recoltera.
     check("cle Radarr vide", values["RADARR_API_KEY"], "")
