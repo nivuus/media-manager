@@ -6,6 +6,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MediaManager is a Docker-based media automation platform for movies and TV shows. It consists of microservices orchestrated via Docker Compose, handling the complete workflow from user requests to media library delivery with AllDebrid downloads, AI-powered subtitles, and transcoding.
 
+## Ce dépôt est un package Nivuus
+
+Contrat `nivuus.dev/v1`, consommé par `~/Projects/Nivuus/packages/installer`.
+Quatre conséquences qui priment sur tout le reste de ce fichier :
+
+- **`stack/` EST le répertoire de déploiement**, à l'octet près. Ajouter un
+  service au compose sans mettre son asset sous `stack/` le rend absent de la
+  cible. Le hook `install` copie le sous-arbre entier, il n'a pas de liste.
+- **Seuls les fichiers commités voyagent** : `build.sh` exporte par
+  `git archive HEAD`. Un fichier laissé non commité n'existe pas pour l'ISO.
+- **`tier: userspace`** : déclarer `kernel-cmdline`, `modules` ou
+  `hugepages-mib` fait **refuser** le manifeste par le moteur, pas ignorer la
+  clé.
+- **Aucun `claims:`, délibérément.** Le package `console` réclame le GPU en
+  exclusivité ; un claim identique ici rendrait les deux mutuellement
+  exclusifs, alors que le node NVENC partage justement la carte avec la VM
+  Windows via les hooks libvirt de `console`.
+
+Les chemins ont changé : le compose, les trois scripts de maintenance et les
+assets Tdarr sont sous `stack/`. Le déploiement est `/opt/nivuus/media-manager`
+(et non plus `/opt/nivuus/MediaManager`).
+
+Les trois lignes de crontab sont remplacées par
+`media-manager-{reset-error,update-wanted,cleanup}.timer`, livrées par le
+package et armées par le hook `activate`. Tests : `make test`.
+
 ## Essential Commands
 
 ### Container Management
@@ -30,15 +56,15 @@ docker compose ps
 
 **Error Cleanup** (`reset-error.py`):
 ```bash
-python3 reset-error.py
+systemctl start media-manager-reset-error.service   # ou : python3 stack/reset-error.py
 ```
-Removes failed downloads from Radarr (port 7878) and Sonarr (port 8989), plus any queue item stuck >72h (removed + blocklisted). Also cleans files older than 24h in the Downloads directory, recreates the 2 category subdirs (radarr, tv-sonarr), and removes entries whose metadata was deleted from TMDb/TheTVDB (file-less only). Runs daily at 06:00 via root crontab.
+Removes failed downloads from Radarr (port 7878) and Sonarr (port 8989), plus any queue item stuck >72h (removed + blocklisted). Also cleans files older than 24h in the Downloads directory, recreates the 2 category subdirs (radarr, tv-sonarr), and removes entries whose metadata was deleted from TMDb/TheTVDB (file-less only). Lancé quotidiennement à 06:00 par `media-manager-reset-error.timer`, livré par le package.
 
 A finished download that failed to import (`importPending`/`importBlocked`) is **imported, never deleted**: the script calls the manual-import API for it. Deleting those instead re-opened the exact same grab on every cycle — measured at 64 re-grabs of a single season pack, which is what exhausted the indexer API quotas. Deletion only happens after 72h, and always with blocklisting so the next search picks a different release.
 
 **Missing Content Search** (`update_wanted.py`):
 ```bash
-python3 update_wanted.py
+systemctl start media-manager-update-wanted.service # ou : python3 stack/update_wanted.py
 ```
 Searches for missing episodes/movies across both instances (Radarr + Sonarr) and triggers automatic downloads. Each run searches a bounded slice (`MAX_SEARCH_PER_INSTANCE`, newest first) and rotates through the backlog across days via `.update_wanted_state`; instances are spaced by `DELAY_BETWEEN_INSTANCES`. Unreleased/unaired items are skipped. Searching everything at once made the indexers answer 429 and Prowlarr disabled them for hours.
 
@@ -206,16 +232,16 @@ All services expose REST APIs. Inter-service communication uses Docker DNS (e.g.
 
 ### When Modifying Python Scripts:
 - All scripts read configuration from environment variables (via `python-dotenv`)
-- `reset-error.py`: Radarr/Sonarr use REST API v3, cleanup deletes files >24h, purges queue items stuck >72h and dead TMDb/TVDB entries. Never delete a completed-but-unimported download: manual-import it (see above)
-- `update_wanted.py`: Uses URLs from environment variables; searches a bounded, rotating slice rather than the whole missing list
-- `media_cleanup.py`: Disk cleanup with Tautulli watch data correlation
+- `stack/reset-error.py`: Radarr/Sonarr use REST API v3, cleanup deletes files >24h, purges queue items stuck >72h and dead TMDb/TVDB entries. Never delete a completed-but-unimported download: manual-import it (see above)
+- `stack/update_wanted.py`: Uses URLs from environment variables; searches a bounded, rotating slice rather than the whole missing list
+- `stack/media_cleanup.py`: Disk cleanup with Tautulli watch data correlation
 - Instances are declared as lists (`RADARR_INSTANCES`, `instances`) even though
   there is now one of each: adding an instance back stays a one-line change
 
 ### When Troubleshooting:
 1. Verify Prowlarr indexer sync status
 2. Check RDTClient connection to AllDebrid, and that no download is holding a slot indefinitely
-3. Run `reset-error.py` to clear stuck downloads
+3. Run `systemctl start media-manager-reset-error.service` to clear stuck downloads
 4. Check logs: `docker compose logs -f <service>`
 
 ## Hardware Acceleration

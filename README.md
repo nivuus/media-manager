@@ -1,201 +1,204 @@
-# MediaManager
+# media-manager
 
-A Docker-based media automation platform for movies and TV shows. Handles the complete workflow from user requests to media library delivery with Real-Debrid downloads, AI-powered subtitles, and transcoding.
+A Docker-based media automation platform for movies and TV shows — from a user
+request to a file in the Plex library, with AllDebrid downloads, AI-generated
+subtitles and hardware transcoding.
 
-## Data Flow
+It is packaged as a **Nivuus package** (`nivuus.dev/v1`): the
+[installer](https://github.com/nivuus/installer) embeds it in its ISO and
+deploys it in two phases, with no manual step.
+
+## Data flow
 
 ```
-User Request (Overseerr :5055)
+User request (Seerr :5055)
     ↓
-Search (Prowlarr :9696 → Indexers via FlareSolverr)
+Search (Prowlarr :9696 → indexers via FlareSolverr)
     ↓
-Download (RDTClient :6500 → Real-Debrid)
+Download (RDTClient :6500 → AllDebrid)
     ↓
 Organize (Radarr :7878 · Sonarr :8989)
     ↓
-Transcode (Tdarr :8265, optional)
+Transcode (Tdarr :8265-8266, optional)
     ↓
-Subtitles (Bazarr :6767 → Providers + Whisper AI :9000)
+Subtitles (Bazarr :6767 → providers + Whisper ASR :9000)
     ↓
-Library (Plex via Tautulli :8181 monitoring)
+Library (Plex, monitored by Tautulli :8181)
 ```
 
-## Prerequisites
-
-- **Docker** and **Docker Compose** (v2+)
-- Storage for media files (Movies, TV Shows, Downloads)
-- A [Real-Debrid](https://real-debrid.com/) account
-- *(Optional)* Intel GPU with QSV support for hardware-accelerated transcoding
-
-## Quick Start
+## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/MediaManager.git
-cd MediaManager
-
-# Create your configuration
-cp .env.example .env
-# Edit .env with your paths and settings
-nano .env
-
-# Start all services
-docker compose up -d
+cd ~/Projects/Nivuus/packages/installer/installer
+PACKAGE_REPOS="$HOME/Projects/Nivuus/packages/media-manager" sudo -E make build-iso
 ```
+
+The export uses `git archive HEAD`: **only committed files travel**. A file
+left uncommitted does not exist as far as the installer is concerned.
+
+| Phase | When | What it does |
+|---|---|---|
+| `install` | On the target filesystem | Copies `stack/` to `/opt/nivuus/media-manager`, renders `.env`, places the six maintenance units |
+| `activate` | After the reboot, network up | `docker compose up -d`, harvests the Radarr/Sonarr/Prowlarr API keys, arms the three timers |
+
+There is no `resolve` phase: the package is `tier: userspace` — it declares no
+kernel parameter, no module and no hugepage, so there is nothing to resolve.
+A machine without `/dev/dri` is not refused either; Plex and Tdarr fall back to
+software transcoding.
+
+On a machine that is already installed, run the `install` phase directly:
+
+```bash
+echo '{"package":{},"hw":{},"answers":{"media_root":"/media/data","nvenc_node":false}}' \
+  | sudo python3 hooks/install.py --phase install --root /
+```
+
+An existing `.env` is **never overwritten** — missing variables are appended,
+existing values and comments are left alone.
+
+## Repository layout
+
+| Path | What it is |
+|---|---|
+| `nivuus-package.yaml` | The manifest. `tier: userspace`, no `claims`, no `requires` |
+| `wizard.yaml` | The eight questions the portal asks |
+| `hooks/` | `install.py` and `activate.py` — stdlib only, they run on a minimal Debian |
+| `stack/` | **The deployment directory, byte for byte.** Compose files, the three maintenance scripts, the Tdarr assets |
+| `systemd/` | The three service/timer pairs that replace the crontab |
+| `tests/` | Five standalone suites, run by `make test` |
+
+`stack/` being the deployment directory verbatim is what makes the `install`
+hook a plain recursive copy: there is no file list to keep in sync, so there is
+no file anyone can forget to add alongside a new service.
 
 ## Configuration
 
-All configuration is done via the `.env` file. Copy `.env.example` and fill in your values.
+`.env` is rendered by the `install` hook from the wizard answers and lives at
+`/opt/nivuus/media-manager/.env`, mode 0600.
 
-### Storage Paths
+| Variable | Source | Example |
+|---|---|---|
+| `MEDIA_ROOT` | wizard | `/media/data` |
+| `DOWNLOADS_DIR` · `MOVIES_DIR` · `TV_DIR` | **derived** from `MEDIA_ROOT` | `/media/data/Downloads` |
+| `TRANSCODE_DIR` | wizard | `/media/backup/.transcode` |
+| `COMPOSE_FILE` | `/dev/dri` present or not | `docker-compose.yml:docker-compose.qsv.yml` |
+| `COMPOSE_PROFILES` | wizard (`nvenc_node`) | `nvenc` |
+| `VIDEO_GID` · `RENDER_GID` | target's `/etc/group` | `44` · `105` |
+| `RADARR_API_KEY` · `SONARR_API_KEY` · `PROWLARR_API_KEY` | harvested by `activate` | — |
+| `BAZARR_API_KEY` · `TAUTULLI_API_KEY` · `OVERSEERR_API_KEY` | **by hand**, Settings > General | — |
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `MEDIA_ROOT` | Root media directory | `/media/data` |
-| `DOWNLOADS_DIR` | Temporary download directory | `/media/data/Downloads` |
-| `MOVIES_DIR` | Movies library | `/media/data/Movies` |
-| `TV_DIR` | TV Shows library | `/media/data/TV Shows` |
-| `TRANSCODE_DIR` | Tdarr transcode cache | `/media/backup/.transcode` |
+The three library directories are derived rather than asked: they are three
+subdirectories of one mount point, and separating them is what silently
+disabled hardlinks once — a 4.8 GB import went from seconds to 13 minutes, with
+the space used twice until the 24h purge.
 
-### API Keys
+## Maintenance
 
-API keys are generated by each service on first run. After starting the stack, find them in each service's web UI under **Settings > General > API Key**, then add them to `.env`:
+Three systemd timers, shipped by the package and armed by the `activate` hook:
 
-| Variable | Service | Port |
-|----------|---------|------|
-| `RADARR_API_KEY` | Radarr | 7878 |
-| `SONARR_API_KEY` | Sonarr | 8989 |
-| `PROWLARR_API_KEY` | Prowlarr | 9696 |
-| `BAZARR_API_KEY` | Bazarr | 6767 |
-| `TAUTULLI_API_KEY` | Tautulli | 8181 |
-| `OVERSEERR_API_KEY` | Overseerr | 5055 |
-
-### Optional: YGG / TMDB
-
-| Variable | Description |
-|----------|-------------|
-| `YGG_USERNAME` | YGG account username (for Ygege indexer) |
-| `YGG_PASSWORD` | YGG account password |
-| `TMDB_TOKEN` | TMDB API token ([get one here](https://www.themoviedb.org/settings/api)) |
-
-## First Run Setup
-
-After `docker compose up -d`, configure services in this order:
-
-1. **Prowlarr** (`:9696`) — Add indexers and FlareSolverr (`http://flaresolverr:8191`)
-2. **RDTClient** (`:6500`) — Connect your Real-Debrid account
-3. **Radarr** (`:7878`) — Add root folder, download client (RDTClient), connect to Prowlarr
-4. **Sonarr** (`:8989`) — Same as Radarr
-5. **Bazarr** (`:6767`) — Configure subtitle providers, link to Radarr/Sonarr
-6. **Overseerr** (`:5055`) — Connect to Radarr/Sonarr instances, set up user access
-7. **Tautulli** (`:8181`) — Connect to Plex
-8. **Plex** — Add movie and TV libraries pointing to your media directories
-
-After configuring all services, copy each API key to your `.env` file so the maintenance scripts can work.
-
-## Scripts
-
-All scripts read configuration from `.env` automatically (via `python-dotenv`).
+| Unit | Time | What it does |
+|---|---|---|
+| `media-manager-reset-error.timer` | 06:00 | Clears failed downloads, imports the completed-but-unimported ones |
+| `media-manager-update-wanted.timer` | 07:00 | Searches a bounded, rotating slice of the missing backlog |
+| `media-manager-cleanup.timer` | 08:00 | Frees disk space, least-watched first, using Tautulli data |
 
 ```bash
-pip install requests python-dotenv
+systemctl list-timers 'media-manager-*'
+systemctl start media-manager-reset-error.service   # run one now
+journalctl -u media-manager-reset-error.service -n 50
 ```
 
-### `reset-error.py` — Error Cleanup
-
-Removes failed downloads from all Radarr/Sonarr instances and cleans files older than 24h from the Downloads directory.
+The scripts also run by hand from the deployment directory:
 
 ```bash
-python3 reset-error.py
+cd /opt/nivuus/media-manager
+python3 media_cleanup.py --status        # disk status
+python3 media_cleanup.py --dry-run       # simulate
+python3 media_cleanup.py --threshold 15  # custom threshold (15% free)
 ```
 
-### `update_wanted.py` — Missing Content Search
-
-Triggers a search for all missing episodes/movies across all 4 instances.
-
-```bash
-python3 update_wanted.py
-```
-
-### `media_cleanup.py` — Disk Space Management
-
-Automatically removes least-watched media when disk space runs low. Uses Tautulli watch data to prioritize what to delete.
-
-```bash
-python3 media_cleanup.py --status        # Check disk status
-python3 media_cleanup.py --dry-run       # Simulate cleanup
-python3 media_cleanup.py                 # Run cleanup
-python3 media_cleanup.py --threshold 15  # Custom threshold (15% free)
-```
-
-## Architecture
-
-### Services
+## Services
 
 | Service | Port(s) | Description |
-|---------|---------|-------------|
-| **Overseerr** | 5055 | User request portal (localhost only) |
+|---|---|---|
+| **Seerr** | 5055 | Request portal (localhost only) |
 | **Prowlarr** | 9696 | Indexer manager |
 | **FlareSolverr** | — | Cloudflare bypass for indexers |
 | **Ygege** | — | YGG indexer integration |
-| **RDTClient** | 6500 | Real-Debrid download client |
+| **RDTClient** | 6500 | AllDebrid download client |
+| **SABnzbd** | 8080 | Usenet download client |
 | **Radarr** | 7878 | Movie management |
 | **Sonarr** | 8989 | TV show management |
 | **Bazarr** | 6767 | Subtitle automation |
-| **Tdarr** | 8265-8266 | Media transcoding server |
-| **Tdarr-Node** | — | Transcoding worker node |
+| **Tdarr** | 8265-8266 | Transcoding server |
+| **Tdarr-Node** | — | QSV transcoding worker |
+| **Tdarr-Node-NVENC** | — | NVIDIA worker, profile `nvenc` |
 | **Plex** | 32400 | Media server (host network) |
-| **Tautulli** | 8181 | Plex monitoring/statistics |
+| **Tautulli** | 8181 | Plex monitoring and statistics |
 | **Whisper ASR** | 9000 | AI subtitle generation |
 
-### Single-Instance Pattern
+### One instance per media type
 
-One Radarr, one Sonarr, one Bazarr. The stack used to run each of them in a
-standard/4K pair, because Seerr routes a 4K request to a *server* flagged
-`is4k` — there is no per-request quality profile. The pair was dropped on
-2026-08-18: both members shared a root folder and kept picking up each other's
-files, and only 18 of 856 movie folders ever held two versions. 4K files
-already in the library are kept (they sit outside the quality profile, so
-Radarr/Sonarr leave them alone); new grabs come in at the profile's quality.
+One Radarr, one Sonarr, one Bazarr. The stack ran each of them as a
+standard/4K pair until 2026-08-18, because Seerr routes a 4K request to a
+*server* flagged `is4k` — there is no per-request quality profile. The pair was
+dropped: both members shared a root folder and kept importing each other's
+files, and only 18 of 856 movie folders ever held two versions. The 4K files
+already in the library are kept — they sit outside the quality profile, so
+Radarr and Sonarr leave them alone.
 
-### Storage Layout
+### No GPU claim, deliberately
+
+The manifest declares no `claims:`. The `console` package claims the GPU
+exclusively; an identical claim here would make the two mutually exclusive in
+the engine's conflict check — while the NVENC Tdarr node is precisely designed
+to *share* the card with the Windows VM, through `console`'s own libvirt hooks.
+
+### Storage layout
 
 ```
 $MEDIA_ROOT/
-├── Downloads/      # Temporary (shared by all download clients)
-├── Movies/         # Final library (Radarr)
-└── TV Shows/       # Final library (Sonarr)
+├── Downloads/      # temporary, shared by every download client
+├── Movies/         # Radarr library
+└── TV Shows/       # Sonarr library
 ```
+
+Radarr and Sonarr mount `${MEDIA_ROOT}:/data` as a **single** bind mount, not
+one per directory. Hardlinks only work inside one mount point — see the
+`CLAUDE.md` note before changing it.
+
+## Tests
+
+```bash
+make test
+make test NIVUUS_INSTALLER_DIR=$HOME/Projects/Nivuus/packages/installer
+```
+
+The second form validates the manifest and the wizard with the engine's own
+parser rather than the local re-check. That is the authoritative verification;
+the local one exists so the repository stays testable on its own.
 
 ## Troubleshooting
 
 ```bash
-# Check all service statuses
+cd /opt/nivuus/media-manager
 docker compose ps
-
-# View logs for a specific service
 docker compose logs -f radarr
-
-# Restart a service
-docker compose restart prowlarr
-
-# Clear stuck downloads
-python3 reset-error.py
-
-# Validate docker-compose syntax
-docker compose config
+docker compose config              # validate the merged compose files
 ```
 
-### Common Issues
+- **Indexers not syncing** — check Prowlarr's connection to FlareSolverr.
+- **Downloads stuck on "waiting for download links"** — RDTClient's slots are
+  saturated by hung downloads; `docker compose restart rdtclient`.
+- **Transcoding errors** — check the node memory limits before the flow; see
+  `CLAUDE.md`, "Tdarr resource limits".
+- **No hardware transcoding** — `grep COMPOSE_FILE .env`: if the QSV overlay is
+  missing, `/dev/dri` was absent when the `install` hook ran.
 
-- **Indexers not syncing**: Check Prowlarr connection to FlareSolverr and indexer status
-- **Downloads stuck**: Verify RDTClient connection to Real-Debrid
-- **Subtitles not downloading**: Ensure Bazarr is connected to the correct Radarr/Sonarr instance
-- **Transcoding errors**: Verify GPU passthrough (`/dev/dri` device exists on host)
+## Auto-updates
 
-## Auto-Updates
-
-All services have [Watchtower](https://containrrr.dev/watchtower/) labels enabled for automatic Docker image updates.
+Every service carries a [Watchtower](https://containrrr.dev/watchtower/) label
+for automatic image updates.
 
 ## License
 
