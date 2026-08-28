@@ -1,56 +1,13 @@
-# Service data directories (generated at first run)
-radarr/
-sonarr/
-prowlarr/
-bazarr/
-overseerr/
-tautulli/
-tdarr/configs/
-tdarr/flows/
-tdarr/logs/
-tdarr/server/
-tdarr/transcode_cache/
-tdarr_cache/
-# tdarr/bin : ignorer les binaires téléchargés, suivre le script
-tdarr/bin/*
-!tdarr/bin/fetch-binaries.sh
-tdarr-node/
-plex/
-rdtclient/
-ygege/
-unmanic/
-data/
-sabnzbd/
-qbittorrent-vpn/
-overseerr-backup/
-tdarr/configs-nvenc/
-aria2-config/
+# Environnement rendu a l'installation (contient des identifiants)
+stack/.env
 
-# Environment (contains secrets)
-.env
-
-# Curseur de rotation ecrit par update_wanted.py a l'execution
-.update_wanted_state
-
-# Logs
-*.log
-
-# Backups
-docker-compose.yml.bak
-docker-compose.yml.avant-hardlinks
-backup-fusion-4k-*/
-
-# Python cache
+# Cache Python
 __pycache__/
 *.pyc
 
-# OS files
+# Journaux
+*.log
+
+# Fichiers OS
 .DS_Store
 Thumbs.db
-
-# Instance-specific scripts
-migrate_tags.py
-aria2-watchdog.sh
-
-# VPN config (may contain credentials)
-*.ovpn
