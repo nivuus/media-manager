@@ -3,9 +3,9 @@
 Media Cleanup Script for MediaManager
 Automatically removes stale media when disk space is low.
 
-NOTE: This setup uses SHARED storage between standard and 4K instances.
-      Both Radarr instances point to /data/Movies, both Sonarr to /data/TV Shows.
-      Duplicate detection is DISABLED because there are no separate files.
+NOTE: One Radarr and one Sonarr instance since the 4K instances were merged
+      in (2026-08-18). Radarr points to /data/Movies, Sonarr to /data/TV Shows.
+      Duplicate detection is DISABLED: one title, one file.
 """
 
 import argparse
@@ -29,7 +29,7 @@ except ImportError:
 # =============================================================================
 
 DISK_PATH = os.environ.get('MEDIA_ROOT', '/media/data')
-SPACE_THRESHOLD_PERCENT = 25  # Delete media when free space < 25%
+SPACE_THRESHOLD_PERCENT = 5  # Delete media when free space < 5%
 
 TAUTULLI_URL = os.environ.get('TAUTULLI_URL', 'http://localhost:8181') + '/api/v2'
 TAUTULLI_API_KEY = os.environ.get('TAUTULLI_API_KEY', '')
@@ -37,39 +37,34 @@ TAUTULLI_API_KEY = os.environ.get('TAUTULLI_API_KEY', '')
 OVERSEERR_URL = os.environ.get('OVERSEERR_URL', 'http://localhost:5055') + '/api/v1'
 OVERSEERR_API_KEY = os.environ.get('OVERSEERR_API_KEY', '')
 
-# NOTE: Both instances share the same storage - use only 4K instances for deletion
-# to avoid deleting files that are referenced by both instances
-RADARR_4K_URL = os.environ.get('RADARR_4K_URL', 'http://localhost:7879')
-RADARR_4K_API_KEY = os.environ.get('RADARR_4K_API_KEY', os.environ.get('RADARR_API_KEY', ''))
-
-SONARR_4K_URL = os.environ.get('SONARR_4K_URL', 'http://localhost:8990')
-SONARR_4K_API_KEY = os.environ.get('SONARR_4K_API_KEY', '')
-
-RADARR_INSTANCES = [
-    {'name': 'Radarr-4K', 'url': f'{RADARR_4K_URL}/api/v3', 'api_key': RADARR_4K_API_KEY, 'is_4k': True}
-]
-
-SONARR_INSTANCES = [
-    {'name': 'Sonarr-4K', 'url': f'{SONARR_4K_URL}/api/v3', 'api_key': SONARR_4K_API_KEY, 'is_4k': True}
-]
-
-# Standard instances (for reference only, NOT used for deletion)
+# Every configured instance is scanned, and entries are de-duplicated by
+# physical folder path (see get_all_movies/get_all_series) with the deletion
+# issued to every instance referencing that path. Kept as-is after the 4K merge:
+# a single instance is simply the degenerate case, and the structure survives
+# adding an instance back.
 RADARR_URL = os.environ.get('RADARR_URL', 'http://localhost:7878')
 RADARR_API_KEY = os.environ.get('RADARR_API_KEY', '')
+
+
 SONARR_URL = os.environ.get('SONARR_URL', 'http://localhost:8989')
 SONARR_API_KEY = os.environ.get('SONARR_API_KEY', '')
 
-RADARR_STANDARD = {'name': 'Radarr', 'url': f'{RADARR_URL}/api/v3', 'api_key': RADARR_API_KEY}
-SONARR_STANDARD = {'name': 'Sonarr', 'url': f'{SONARR_URL}/api/v3', 'api_key': SONARR_API_KEY}
+
+RADARR_INSTANCES = [
+    {'name': 'Radarr', 'url': f'{RADARR_URL}/api/v3', 'api_key': RADARR_API_KEY},
+]
+
+SONARR_INSTANCES = [
+    {'name': 'Sonarr', 'url': f'{SONARR_URL}/api/v3', 'api_key': SONARR_API_KEY},
+]
 
 
 def check_api_keys():
     """Verify that required API keys are configured."""
     missing = []
-    if not RADARR_4K_API_KEY:
-        missing.append('RADARR_4K_API_KEY (or RADARR_API_KEY)')
-    if not SONARR_4K_API_KEY:
-        missing.append('SONARR_4K_API_KEY')
+    for inst in RADARR_INSTANCES + SONARR_INSTANCES:
+        if not inst['api_key']:
+            missing.append(f"{inst['name']} API key")
     if not TAUTULLI_API_KEY:
         missing.append('TAUTULLI_API_KEY')
     if missing:
@@ -92,6 +87,23 @@ def get_disk_usage(path: str) -> Dict:
         'percent_free': (usage.free / usage.total) * 100,
         'percent_used': (usage.used / usage.total) * 100
     }
+
+
+def get_real_size(path: str) -> int:
+    """Get actual size on disk for a file or directory."""
+    if not path or not os.path.exists(path):
+        return 0
+    if os.path.isfile(path):
+        return os.path.getsize(path)
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                total += os.path.getsize(fp)
+            except OSError:
+                pass
+    return total
 
 
 def space_below_threshold(path: str, threshold_percent: float) -> bool:
@@ -141,34 +153,94 @@ def get_library_media_info(section_id: int) -> List[Dict]:
     return []
 
 
+def get_watch_history() -> List[Dict]:
+    """Get watch history from Tautulli (actual play events)."""
+    result = tautulli_request('get_history', {'length': 10000})
+    if result:
+        return result.get('response', {}).get('data', {}).get('data', [])
+    return []
+
+
+def watch_key(title: str, year=None) -> str:
+    """Normalized lookup key. Year disambiguates remakes/same-title works."""
+    title = (title or '').lower().strip()
+    try:
+        year = int(year)
+    except (TypeError, ValueError):
+        year = 0
+    return f"{title}|{year}" if year else title
+
+
+def _merge_watch_entry(title_map: Dict[str, Dict], key: str, last_watched: int, play_count: int):
+    """Insert/merge a watch entry, keeping the most recent date and highest count."""
+    if key in title_map:
+        title_map[key]['last_watched'] = max(title_map[key]['last_watched'], last_watched)
+        title_map[key]['play_count'] = max(title_map[key]['play_count'], play_count)
+    else:
+        title_map[key] = {'last_watched': last_watched, 'play_count': play_count}
+
+
 def build_watch_data_map() -> Dict[str, Dict]:
     """
-    Build a map of title -> {last_watched, play_count} from Tautulli.
+    Build a map of "title|year" -> {last_watched, play_count} from Tautulli.
+
+    Keying on title AND year avoids correlating the wrong work when two share a
+    title (remakes, reboots) — which previously risked deleting a recently
+    watched item. Each entry is also indexed by bare title as a fallback for
+    when the year is missing on one side.
+    Sources: get_library_media_info (play counts) + get_history (play events).
     """
-    title_map = {}
+    title_map: Dict[str, Dict] = {}
 
+    def index(title, year, last_watched, play_count):
+        title = (title or '').lower().strip()
+        if not title:
+            return
+        _merge_watch_entry(title_map, watch_key(title, year), last_watched, play_count)
+        # Bare-title fallback key (only helps when unambiguous on lookup side).
+        if year:
+            _merge_watch_entry(title_map, title, last_watched, play_count)
+
+    # Source 1: Library media info (may have gaps)
     libraries = get_tautulli_libraries()
+    lib_items = 0
     if not libraries:
-        logging.warning("Could not fetch Tautulli libraries, using fallback (date added)")
-        return title_map
+        logging.warning("Could not fetch Tautulli libraries")
+    else:
+        for library in libraries:
+            for item in get_library_media_info(library.get('section_id')):
+                index(item.get('title', ''), item.get('year'),
+                      int(item.get('last_played', 0) or 0),
+                      int(item.get('play_count', 0) or 0))
+                lib_items += 1
+        logging.info(f"Library media info: {lib_items} items")
 
-    for library in libraries:
-        section_id = library.get('section_id')
-        media_info = get_library_media_info(section_id)
+    # Source 2: Watch history (fills gaps + more accurate recent play dates)
+    history = get_watch_history()
+    history_play_counts: Dict[str, int] = {}
+    for entry in history:
+        # For TV shows, grandparent_title is the show name; for movies, use title
+        title = (entry.get('grandparent_title') or entry.get('title', '')).lower().strip()
+        if not title:
+            continue
+        key = watch_key(title, entry.get('year'))
+        history_play_counts[key] = history_play_counts.get(key, 0) + 1
+        index(title, entry.get('year'), int(entry.get('date', 0) or 0), 1)
 
-        for item in media_info:
-            title = item.get('title', '').lower().strip()
-            play_count = item.get('play_count', 0) or 0
-            last_played = item.get('last_played', 0) or 0
+    # Promote history-derived play counts where they exceed the library figure.
+    for key, count in history_play_counts.items():
+        if key in title_map and title_map[key]['play_count'] < count:
+            title_map[key]['play_count'] = count
 
-            if title:
-                title_map[title] = {
-                    'last_watched': int(last_played),
-                    'play_count': int(play_count)
-                }
-
-    logging.info(f"Fetched watch data for {len(title_map)} items from Tautulli")
+    logging.info(f"Total watch data: {len(title_map)} keys")
     return title_map
+
+
+def lookup_watch_info(watch_data: Dict[str, Dict], title: str, year=None) -> Dict:
+    """Look up watch info by (title, year), falling back to bare title."""
+    return (watch_data.get(watch_key(title, year))
+            or watch_data.get((title or '').lower().strip())
+            or {})
 
 
 # =============================================================================
@@ -191,56 +263,78 @@ def radarr_request(instance: Dict, endpoint: str, method: str = 'GET', params: D
 
 
 def get_all_movies() -> List[Dict]:
-    """Get all movies from both Radarr instances."""
-    all_movies = []
+    """Get all movies from every Radarr instance, de-duplicated by folder path.
+
+    We keep ONE entry per physical path (size counted once) and record every
+    (instance, id) that references it, so deletion removes the file AND every DB
+    record pointing at it — whatever the number of instances configured.
+    """
+    by_path: Dict[str, Dict] = {}
 
     for instance in RADARR_INSTANCES:
         response = radarr_request(instance, '/movie')
-        if response and response.status_code == 200:
-            movies = response.json()
-            for movie in movies:
-                if movie.get('hasFile', False):
-                    size = movie.get('sizeOnDisk', 0)
-                    if movie.get('movieFile'):
-                        size = movie['movieFile'].get('size', size)
-
-                    movie['_instance'] = instance
-                    movie['_instance_name'] = instance['name']
-                    movie['_is_4k'] = instance['is_4k']
-                    movie['_size'] = size
-                    all_movies.append(movie)
-
-            logging.info(f"[{instance['name']}] Found {len([m for m in movies if m.get('hasFile')])} movies with files")
-        else:
+        if not (response and response.status_code == 200):
             logging.error(f"[{instance['name']}] Failed to fetch movies")
+            continue
 
-    return all_movies
+        movies = response.json()
+        with_files = 0
+        for movie in movies:
+            if not movie.get('hasFile', False):
+                continue
+            with_files += 1
+            path = (movie.get('path') or '').rstrip('/')
+            key = path or f"{instance['name']}:{movie['id']}"  # fallback: never merge unknown paths
+
+            ref = {'instance': instance, 'id': movie['id']}
+            if key in by_path:
+                by_path[key]['_instances'].append(ref)
+                continue
+
+            # Real disk size (accurate after Tdarr), counted once per folder.
+            real_size = get_real_size(path)
+            if real_size == 0:
+                real_size = movie.get('sizeOnDisk', 0)
+                if movie.get('movieFile'):
+                    real_size = movie['movieFile'].get('size', real_size)
+
+            movie['_instances'] = [ref]
+            movie['_instance'] = instance          # primary (back-compat)
+            movie['_instance_name'] = instance['name']
+            movie['_size'] = real_size
+            by_path[key] = movie
+
+        logging.info(f"[{instance['name']}] Found {with_files} movies with files")
+
+    return list(by_path.values())
 
 
 def delete_movie(movie: Dict, dry_run: bool = False) -> bool:
-    """Delete a movie via Radarr API."""
-    instance = movie['_instance']
-    movie_id = movie['id']
+    """Delete a movie from every instance referencing it (removes files once)."""
     title = movie.get('title', 'Unknown')
     size_gb = movie['_size'] / 1e9
+    refs = movie.get('_instances') or [{'instance': movie['_instance'], 'id': movie['id']}]
 
     if dry_run:
-        logging.info(f"[DRY-RUN] Would delete movie: {title} ({size_gb:.2f} GB) from {instance['name']}")
+        names = ', '.join(r['instance']['name'] for r in refs)
+        logging.info(f"[DRY-RUN] Would delete movie: {title} ({size_gb:.2f} GB) from {names}")
         return True
 
-    response = radarr_request(
-        instance,
-        f'/movie/{movie_id}',
-        method='DELETE',
-        params={'deleteFiles': 'true', 'addImportExclusion': 'false'}
-    )
-
-    if response and response.status_code in [200, 202, 204]:
-        logging.info(f"Deleted movie: {title} ({size_gb:.2f} GB) from {instance['name']}")
-        return True
-    else:
-        logging.error(f"Failed to delete movie {title} from {instance['name']}")
-        return False
+    ok = False
+    for ref in refs:
+        instance = ref['instance']
+        response = radarr_request(
+            instance,
+            f"/movie/{ref['id']}",
+            method='DELETE',
+            params={'deleteFiles': 'true', 'addImportExclusion': 'false'}
+        )
+        if response and response.status_code in [200, 202, 204]:
+            logging.info(f"Deleted movie: {title} ({size_gb:.2f} GB) from {instance['name']}")
+            ok = True
+        else:
+            logging.error(f"Failed to delete movie {title} from {instance['name']}")
+    return ok
 
 
 # =============================================================================
@@ -263,53 +357,71 @@ def sonarr_request(instance: Dict, endpoint: str, method: str = 'GET', params: D
 
 
 def get_all_series() -> List[Dict]:
-    """Get all TV series from both Sonarr instances."""
-    all_series = []
+    """Get all TV series from every Sonarr instance, de-duplicated by folder path."""
+    by_path: Dict[str, Dict] = {}
 
     for instance in SONARR_INSTANCES:
         response = sonarr_request(instance, '/series')
-        if response and response.status_code == 200:
-            series_list = response.json()
-            for series in series_list:
-                size = series.get('statistics', {}).get('sizeOnDisk', 0)
-                if size > 0:
-                    series['_instance'] = instance
-                    series['_instance_name'] = instance['name']
-                    series['_is_4k'] = instance['is_4k']
-                    series['_size'] = size
-                    all_series.append(series)
-
-            logging.info(f"[{instance['name']}] Found {len([s for s in series_list if s.get('statistics', {}).get('sizeOnDisk', 0) > 0])} series with files")
-        else:
+        if not (response and response.status_code == 200):
             logging.error(f"[{instance['name']}] Failed to fetch series")
+            continue
 
-    return all_series
+        series_list = response.json()
+        with_files = 0
+        for series in series_list:
+            path = (series.get('path') or '').rstrip('/')
+            key = path or f"{instance['name']}:{series['id']}"
+            ref = {'instance': instance, 'id': series['id']}
+
+            if key in by_path:
+                by_path[key]['_instances'].append(ref)
+                continue
+
+            # Real disk size (accurate after Tdarr), counted once per folder.
+            real_size = get_real_size(path)
+            if real_size == 0:
+                real_size = series.get('statistics', {}).get('sizeOnDisk', 0)
+            if real_size <= 0:
+                continue
+
+            with_files += 1
+            series['_instances'] = [ref]
+            series['_instance'] = instance          # primary (back-compat)
+            series['_instance_name'] = instance['name']
+            series['_size'] = real_size
+            by_path[key] = series
+
+        logging.info(f"[{instance['name']}] Found {with_files} series with files")
+
+    return list(by_path.values())
 
 
 def delete_series(series: Dict, dry_run: bool = False) -> bool:
-    """Delete a TV series via Sonarr API."""
-    instance = series['_instance']
-    series_id = series['id']
+    """Delete a series from every instance referencing it (removes files once)."""
     title = series.get('title', 'Unknown')
     size_gb = series['_size'] / 1e9
+    refs = series.get('_instances') or [{'instance': series['_instance'], 'id': series['id']}]
 
     if dry_run:
-        logging.info(f"[DRY-RUN] Would delete series: {title} ({size_gb:.2f} GB) from {instance['name']}")
+        names = ', '.join(r['instance']['name'] for r in refs)
+        logging.info(f"[DRY-RUN] Would delete series: {title} ({size_gb:.2f} GB) from {names}")
         return True
 
-    response = sonarr_request(
-        instance,
-        f'/series/{series_id}',
-        method='DELETE',
-        params={'deleteFiles': 'true', 'addImportListExclusion': 'false'}
-    )
-
-    if response and response.status_code in [200, 202, 204]:
-        logging.info(f"Deleted series: {title} ({size_gb:.2f} GB) from {instance['name']}")
-        return True
-    else:
-        logging.error(f"Failed to delete series {title} from {instance['name']}")
-        return False
+    ok = False
+    for ref in refs:
+        instance = ref['instance']
+        response = sonarr_request(
+            instance,
+            f"/series/{ref['id']}",
+            method='DELETE',
+            params={'deleteFiles': 'true', 'addImportListExclusion': 'false'}
+        )
+        if response and response.status_code in [200, 202, 204]:
+            logging.info(f"Deleted series: {title} ({size_gb:.2f} GB) from {instance['name']}")
+            ok = True
+        else:
+            logging.error(f"Failed to delete series {title} from {instance['name']}")
+    return ok
 
 
 # =============================================================================
@@ -382,8 +494,7 @@ def correlate_media_with_watch_data(
     media_list = []
 
     for movie in movies:
-        title = movie.get('title', '').lower().strip()
-        watch_info = watch_data.get(title, {})
+        watch_info = lookup_watch_info(watch_data, movie.get('title', ''), movie.get('year'))
 
         last_watched = watch_info.get('last_watched', 0)
         play_count = watch_info.get('play_count', 0)
@@ -392,7 +503,7 @@ def correlate_media_with_watch_data(
         added_str = movie.get('added', '')
         try:
             added_ts = int(datetime.fromisoformat(added_str.replace('Z', '+00:00')).timestamp()) if added_str else 0
-        except:
+        except (ValueError, TypeError, AttributeError):
             added_ts = 0
 
         # Reference date: last_watched if watched, else added date
@@ -414,8 +525,7 @@ def correlate_media_with_watch_data(
         })
 
     for series_item in series:
-        title = series_item.get('title', '').lower().strip()
-        watch_info = watch_data.get(title, {})
+        watch_info = lookup_watch_info(watch_data, series_item.get('title', ''), series_item.get('year'))
 
         last_watched = watch_info.get('last_watched', 0)
         play_count = watch_info.get('play_count', 0)
@@ -423,7 +533,7 @@ def correlate_media_with_watch_data(
         added_str = series_item.get('added', '')
         try:
             added_ts = int(datetime.fromisoformat(added_str.replace('Z', '+00:00')).timestamp()) if added_str else 0
-        except:
+        except (ValueError, TypeError, AttributeError):
             added_ts = 0
 
         reference_date = last_watched if last_watched > 0 else added_ts
@@ -432,7 +542,7 @@ def correlate_media_with_watch_data(
             'type': 'series',
             'id': series_item['id'],
             'title': series_item.get('title', 'Unknown'),
-            'tmdb_id': series_item.get('tvdbId'),  # Using tvdbId for series
+            'tmdb_id': series_item.get('tmdbId'),
             'size': series_item.get('_size', 0),
             'instance': series_item['_instance'],
             'instance_name': series_item['_instance_name'],
