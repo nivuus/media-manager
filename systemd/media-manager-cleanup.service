@@ -1,0 +1,14 @@
+[Unit]
+Description=MediaManager — menage disque correle aux statistiques Tautulli
+Documentation=file:/opt/nivuus/media-manager/media_cleanup.py
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/nivuus/media-manager
+EnvironmentFile=/opt/nivuus/media-manager/.env
+ExecStart=/usr/bin/python3 /opt/nivuus/media-manager/media_cleanup.py --log /opt/nivuus/media-manager/cleanup.log
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3600

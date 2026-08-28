@@ -1,0 +1,42 @@
+# DOWNLOADS_DIR, MOVIES_DIR et TV_DIR ne sont PAS demandes : ils sont derives de
+# media_root. Ce sont les trois sous-repertoires du meme point de montage, et
+# les separer est ce qui a desactive les hardlinks une premiere fois (voir
+# CLAUDE.md, « Critical Path Mappings ») — un import de 4,8 Go passe alors de
+# quelques secondes a 13 minutes, avec la place occupee deux fois.
+- key: media_root
+  type: texte
+  label: "Racine de la mediatheque (contiendra Downloads, Movies et TV Shows)"
+  default: "/media/data"
+  required: true
+
+- key: transcode_dir
+  type: texte
+  label: "Repertoire de transcodage temporaire de Plex"
+  default: "/media/backup/.transcode"
+
+- key: timezone
+  type: texte
+  label: "Fuseau horaire"
+  default: "Europe/Paris"
+
+- key: nvenc_node
+  type: bool
+  label: "Second node de transcodage Tdarr sur GPU NVIDIA (NVENC)"
+  default: false
+
+- key: plex_claim
+  type: secret
+  label: "Jeton de rattachement Plex (claim.plex.tv, facultatif)"
+
+- key: ygg_username
+  type: texte
+  label: "Identifiant YGG pour l'indexeur Ygege (facultatif)"
+  default: ""
+
+- key: ygg_password
+  type: secret
+  label: "Mot de passe YGG (facultatif)"
+
+- key: tmdb_token
+  type: secret
+  label: "Jeton API TMDb, requis par Ygege (facultatif)"

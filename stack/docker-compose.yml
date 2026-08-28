@@ -1,0 +1,432 @@
+# Le nom de projet est epingle : il derivait du nom du repertoire, et le
+# renommage du repertoire de deploiement aurait orpheline les douze
+# conteneurs en cours. La valeur est celle que la production utilise
+# deja, pour que le renommage ne recree rien.
+name: mediamanager
+
+services:
+  rdtclient:
+    image: rogerfar/rdtclient
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+#    container_name: rdtclient
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./rdtclient:/data/db
+      - ${DOWNLOADS_DIR}:/data/downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+    ports:
+      - 6500:6500
+    restart: unless-stopped
+
+  sabnzbd:
+    image: linuxserver/sabnzbd:latest
+    restart: always
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - HOST_WHITELIST_ENTRIES=sabnzbd
+    ports:
+      - 8086:8080
+    volumes:
+      - ./sabnzbd:/config
+      - ${DOWNLOADS_DIR}:/data/Downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  radarr:
+    image: linuxserver/radarr:latest
+    restart: always
+    depends_on:
+      - prowlarr
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    environment:
+      - PGID=${PGID}
+      - PUID=${PUID}
+      - TZ=${TZ}
+    ports:
+      - 7878:7878
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7878/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    volumes:
+      - ./radarr:/config
+      # Single mount: hardlinks only work within one mount point. Binding
+      # Downloads and Movies separately makes link() fail with EXDEV even though
+      # both live on the same filesystem, so every import fell back to a full
+      # copy (13 min for 4.8 GB, and the space used twice until the 24h purge).
+      # Inner paths stay /data/Downloads and /data/Movies — nothing to reconfigure.
+      - ${MEDIA_ROOT}:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  sonarr:
+    image: linuxserver/sonarr:latest
+    restart: always
+    depends_on:
+      - prowlarr
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    environment:
+      - PGID=${PGID}
+      - PUID=${PUID}
+      - TZ=${TZ}
+    ports:
+      - 8989:8989
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8989/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    volumes:
+      - ./sonarr:/config
+      # Single mount so hardlinks work — see the radarr service above.
+      - ${MEDIA_ROOT}:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  prowlarr:
+    image: linuxserver/prowlarr:latest
+    restart: always
+    ports:
+      - 9696:9696
+    depends_on:
+      rdtclient:
+        condition: service_started
+      flaresolverr:
+        condition: service_started
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - PGID=${PGID}
+      - PUID=${PUID}
+      - TZ=${TZ}
+    volumes:
+      - ./prowlarr:/config
+      - ${DOWNLOADS_DIR}:/downloads
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  bazarr:
+    image: linuxserver/bazarr:latest
+    restart: always
+    depends_on:
+      - prowlarr
+      - sonarr
+      - radarr
+      - openai-whisper-asr-webservice
+    ports:
+      - 6767:6767
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    environment:
+      - PGID=${PGID}
+      - PUID=${PUID}
+      - TZ=${TZ}
+    volumes:
+      - ./bazarr:/config
+      - ${MOVIES_DIR}:/movies
+      - ${TV_DIR}:/tv
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  flaresolverr:
+    image: alexfozor/flaresolverr:pr-1300-experimental
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    environment:
+      - LOG_LEVEL=info
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+      - TZ=${TZ}
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  ygege:
+    image: uwucode/ygege:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    restart: unless-stopped
+    environment:
+      - YGG_USERNAME=${YGG_USERNAME}
+      - YGG_PASSWORD=${YGG_PASSWORD}
+      - YGG_DOMAIN=www.yggtorrent.support
+      - TMDB_TOKEN=${TMDB_TOKEN}
+      - LOG_LEVEL=info
+      - TZ=${TZ}
+    volumes:
+      - ./ygege:/config
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8715/health || exit 1"]
+      interval: 1m30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    init: true
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    depends_on:
+      - sonarr
+      - radarr
+    environment:
+      - TZ=${TZ}
+      - PORT=5055
+    ports:
+      - 127.0.0.1:5055:5055
+    volumes:
+      - ./overseerr:/app/config
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:5055/api/v1/settings/public || exit 1
+      start_period: 20s
+      timeout: 3s
+      interval: 15s
+      retries: 3
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  tdarr:
+    image: ghcr.io/haveagitgat/tdarr:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    restart: always
+    # Passé de 2 à 4 cœurs et de 2 à 4 Go le 2026-08-24 : le serveur mettait
+    # jusqu'à 106 s à répondre au POST /api/v2/update-node-relay (timeout node
+    # = 30 s), ce qui déconnectait les nodes 172 fois en 24 h. Un worker qui
+    # perd le serveur entre deux plugins échoue sur "Failed to load flow plugin
+    # handler" alors que son ffmpeg a rendu 0 — d'où des transcodeError sur des
+    # encodages réussis. Pic mémoire mesuré : 1,32 Go sur les 2 Go alloués.
+    cpus: 4
+    mem_limit: 4g
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8266/api/v2/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    ports:
+      - 8265:8265 # webUI port
+      - 8266:8266 # server port
+    environment:
+      - TZ=${TZ}
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK_SET=002
+      - serverIP=0.0.0.0
+      - serverPort=8266
+      - webUIPort=8265
+      - inContainer=false
+      - internalNode=false
+    volumes:
+      - ./tdarr/server:/app/server
+      - ./tdarr/configs:/app/configs
+      - ${MEDIA_ROOT}:/media
+      - ./tdarr_cache:/temp
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  tdarr-node:
+    image: ghcr.io/haveagitgat/tdarr_node:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    # `unless-stopped` et non `always`, pour la meme raison que le node NVENC :
+    # les hooks libvirt (/etc/libvirt/hooks/qemu.d/Windows/prepare/begin/10-cpu-confine.sh)
+    # arretent ce conteneur pendant que la VM Windows tourne, et `always` le
+    # ressusciterait au premier redemarrage du demon docker — en pleine partie,
+    # sans que rien ne le signale.
+    restart: unless-stopped
+    depends_on:
+      tdarr:
+        condition: service_healthy
+    # Bridé de 4 à 2 cœurs le 2026-08-16 : quatre gels plateforme (04/08, 05/08,
+    # 07/08 + un démarrage qui n'a jamais abouti) sont tous survenus avec Tdarr
+    # en transcodage soutenu. Cause non prouvée — c'est une réduction de la
+    # charge soutenue pendant l'observation, pas un correctif. Revenir à 4 si
+    # les gels persistent (la charge serait alors innocentée).
+    cpus: 2
+    # mem_limit relevé de 4 à 10 Go le 2026-08-24 : l'OOM killer du cgroup a tué
+    # 4 tdarr-ffmpeg (journal kernel, oom_kill=4) sur des remux 4K — Skyfall,
+    # Casino Royale, Mourir peut attendre, Moonraker. anon-rss au moment du kill :
+    # 3,3 Go, soit la limite atteinte à elle seule par l'encodeur.
+    mem_limit: 10g
+    environment:
+      - TZ=${TZ}
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK_SET=002
+      - ffmpegVersion=7
+      - serverIP=tdarr
+      - serverPort=8266
+      - nodeName=MyInternalNode
+      - inContainer=true
+      - NODE_OPTIONS=--max-old-space-size=4096
+    networks:
+      - default
+    volumes:
+      - ./tdarr/configs:/app/configs
+      - ./tdarr/bin:/app/bin:ro
+      - ./tdarr_cache:/temp
+      - ${MEDIA_ROOT}:/media
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  # Node NVENC : encode sur la RTX 4070, en parallèle du node QSV (iGPU) qui reste
+  # réservé à Plex. La carte est rendue à la VM Windows par les hooks libvirt
+  # (/etc/libvirt/hooks/qemu.d/Windows) qui stoppent ce conteneur AVANT le
+  # `modprobe -r nvidia` : un conteneur tenant /dev/nvidia* bloque le détachement vfio.
+  # D'où `unless-stopped` : il ne doit pas se relancer tout seul pendant que la VM tourne.
+  tdarr-node-nvenc:
+    image: ghcr.io/haveagitgat/tdarr_node:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    restart: unless-stopped
+    # Le second node d'encodage partage la RTX 4070 avec la VM Windows du
+    # package console. Il n'a de sens que sur une machine qui a une carte
+    # NVIDIA : active par COMPOSE_PROFILES=nvenc, ecrit par le hook install
+    # quand la reponse `nvenc_node` du wizard est vraie.
+    profiles:
+      - nvenc
+    depends_on:
+      tdarr:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video]
+    # Bridé de 4 à 2 cœurs le 2026-08-16, même raison que tdarr-node ci-dessus.
+    cpus: 2
+    # mem_limit relevé de 4 à 10 Go le 2026-08-24 : l'OOM killer du cgroup a tué
+    # 4 tdarr-ffmpeg (journal kernel, oom_kill=4) sur des remux 4K — Skyfall,
+    # Casino Royale, Mourir peut attendre, Moonraker. anon-rss au moment du kill :
+    # 3,3 Go, soit la limite atteinte à elle seule par l'encodeur.
+    mem_limit: 10g
+    environment:
+      - TZ=${TZ}
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK_SET=002
+      - ffmpegVersion=7
+      - serverIP=tdarr
+      - serverPort=8266
+      - nodeName=NvencNode
+      - inContainer=true
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NODE_OPTIONS=--max-old-space-size=4096
+    networks:
+      - default
+    volumes:
+      - ./tdarr/configs-nvenc:/app/configs
+      - ./tdarr/bin:/app/bin:ro
+      - ./tdarr_cache:/temp
+      - ${MEDIA_ROOT}:/media
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  tautulli:
+    image: linuxserver/tautulli:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    restart: always
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    ports:
+      - 8181:8181
+    volumes:
+      - ./tautulli:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  plex:
+    image: linuxserver/plex:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    restart: always
+    network_mode: host
+    cpus: 6
+    mem_limit: 12g
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - VERSION=docker
+    volumes:
+      - ./plex:/config
+      - ${MOVIES_DIR}:/media/data/Movies
+      - ${TV_DIR}:/media/data/TV Shows
+      - ${TRANSCODE_DIR}:/transcode
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+  openai-whisper-asr-webservice:
+    image: mccloud/subgen:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - WHISPER_MODEL=base
+      - TRANSCRIBE_DEVICE=auto
+      - WEBHOOK_PORT=9000
+      - TZ=${TZ}
+    ports:
+      - 9000:9000
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m

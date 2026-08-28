@@ -1,0 +1,14 @@
+[Unit]
+Description=MediaManager — nettoyage des telechargements en erreur
+Documentation=file:/opt/nivuus/media-manager/reset-error.py
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/nivuus/media-manager
+EnvironmentFile=/opt/nivuus/media-manager/.env
+ExecStart=/usr/bin/python3 /opt/nivuus/media-manager/reset-error.py
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3600

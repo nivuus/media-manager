@@ -1,41 +1,13 @@
-# Service data directories (generated at first run)
-radarr/
-radarr-4k/
-sonarr/
-sonarr-4k/
-prowlarr/
-bazarr/
-bazarr-4k/
-overseerr/
-tautulli/
-tdarr/
-tdarr-node/
-plex/
-rdtclient/
-ygege/
-unmanic/
-data/
+# Environnement rendu a l'installation (contient des identifiants)
+stack/.env
 
-# Environment (contains secrets)
-.env
-
-# Logs
-*.log
-
-# Backups
-docker-compose.yml.bak
-
-# Python cache
+# Cache Python
 __pycache__/
 *.pyc
 
-# OS files
+# Journaux
+*.log
+
+# Fichiers OS
 .DS_Store
 Thumbs.db
-
-# Instance-specific scripts
-migrate_tags.py
-aria2-watchdog.sh
-
-# VPN config (may contain credentials)
-*.ovpn

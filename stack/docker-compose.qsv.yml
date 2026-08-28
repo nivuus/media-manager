@@ -1,0 +1,32 @@
+# Surcouche d'acceleration materielle Intel (QSV).
+#
+# Fusionnee au fichier principal par COMPOSE_FILE, que le hook install n'ecrit
+# QUE si la machine expose /dev/dri. Sans cette separation, les quatre services
+# ci-dessous echouent au demarrage sur une machine sans iGPU — un montage de
+# peripherique absent est une erreur, pas une degradation.
+#
+# Les GID ne sont pas des litteraux : video=44 est stable sur Debian, render ne
+# l'est pas (104, 105 ou 106 selon la version). Le hook install les lit dans
+# /etc/group de la cible et les ecrit dans le .env.
+services:
+  tdarr:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID}"
+      - "${RENDER_GID}"
+
+  tdarr-node:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID}"
+      - "${RENDER_GID}"
+
+  plex:
+    devices:
+      - /dev/dri:/dev/dri
+
+  openai-whisper-asr-webservice:
+    devices:
+      - /dev/dri:/dev/dri
