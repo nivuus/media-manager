@@ -1,6 +1,6 @@
 apiVersion: nivuus.dev/v1
 name: media-manager
-version: 1.0.0
+version: 0.0.0
 label: "Mediatheque (Plex, *arr, Tdarr)"
 tier: userspace
 

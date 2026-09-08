@@ -1,0 +1,14 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  policy:
+    uses: nivuus/.github/.github/workflows/policy.yml@main
+  security:
+    uses: nivuus/.github/.github/workflows/security.yml@main
+  package:
+    uses: nivuus/.github/.github/workflows/ci-package.yml@main
