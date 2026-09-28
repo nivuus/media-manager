@@ -201,5 +201,5 @@ def run(environ):
 
 def main():
     load_environment()
-    run_log.setup()
+    run_log.setup('reset-error.log')
     return run(os.environ)

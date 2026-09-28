@@ -77,6 +77,13 @@ cleanup = load_unit(UNITS / "media-manager-cleanup.service")
 check("cleanup: journal conserve",
       f"--log {DEPLOY}/cleanup.log" in cleanup["Service"]["ExecStart"], True)
 
+# reset-error keeps a durable log: systemd creates /var/log/media-manager from
+# LogsDirectory= and hands it to the script as LOGS_DIRECTORY, where
+# reset-error.log outlives the journal's retention.
+reset_error = load_unit(UNITS / "media-manager-reset-error.service")
+check("reset-error: durable log directory",
+      reset_error["Service"].get("LogsDirectory"), "media-manager")
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)
