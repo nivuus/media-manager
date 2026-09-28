@@ -3,12 +3,12 @@
 
 Trois choses, dans cet ordre, parce que chacune depend de la precedente.
 
-Before any of that: DOCKER ITSELF IS CHECKED. It is only an apt dependency
-this package declares (nivuus-package.yaml), not something the installer
-engine guarantees, so ensure_docker() runs `docker compose version` first
-and fails with an English message naming what is missing — instead of
-leaving the first real compose call to fail cryptically, or crash outright
-if the docker command does not exist at all.
+Before any of that: DOCKER ITSELF IS CHECKED. Docker Engine with the compose
+v2 plugin is a prerequisite this package requires but does not provision
+itself, so ensure_docker() runs `docker compose version` first and fails
+with an English message naming what is missing — instead of leaving the
+first real compose call to fail cryptically, or crash outright if the
+docker command does not exist at all.
 
 1. DEMARRER LA PILE — mais SEULEMENT les services qui n'ont aucun conteneur.
    C'est ici, et pas en phase install, parce qu'il faut le reseau : quatorze
@@ -171,11 +171,12 @@ class ActivationError(RuntimeError):
 def ensure_docker():
     """Verify Docker Engine with the compose v2 plugin, before any compose call.
 
-    Docker is a prerequisite this package declares via apt (docker.io,
-    docker-compose-v2 — nivuus-package.yaml), not something the engine
-    guarantees on its own. Without this check, a missing or incomplete
-    install would only surface as docker compose's own cryptic failure, or
-    an uncaught crash if the docker command does not exist at all.
+    This package requires it but does not provision it itself — how it gets
+    onto the host (the installer's docker feature, a pre-provisioned image,
+    ...) is outside this hook's concern. Without this check, a missing or
+    incomplete install would only surface as docker compose's own cryptic
+    failure, or an uncaught crash if the docker command does not exist at
+    all.
     """
     try:
         proc = subprocess.run(["docker", "compose", "version"],
