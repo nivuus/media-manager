@@ -20,8 +20,8 @@ STACK = REPO / "stack"
 MAIN = STACK / "docker-compose.yml"
 QSV = STACK / "docker-compose.qsv.yml"
 
-# Les quatre services qui consomment le rendu materiel Intel.
-QSV_SERVICES = ("tdarr", "tdarr-node", "plex", "openai-whisper-asr-webservice")
+# Les trois services qui consomment le rendu materiel Intel.
+QSV_SERVICES = ("tdarr", "tdarr-node", "plex")
 
 failures = []
 
@@ -87,9 +87,16 @@ check("profil de SABnzbd",
 # service actif qui depend d'un service non selectionne fait echouer le
 # demarrage entier.
 optional = {name for name, svc in main["services"].items() if svc.get("profiles")}
+# A depends_on entry naming a service that is not declared is exactly what
+# `docker compose config` refuses with "service ... depends on undefined
+# service" — checked here, without running docker, so removing a service
+# (e.g. the Whisper ASR one) can never leave a stale reference behind.
+declared = set(main["services"])
 for name, svc in main["services"].items():
     deps = svc.get("depends_on") or {}
     for dep in (deps if isinstance(deps, (list, dict)) else []):
+        check(f"{name}: depends_on targets a declared service ({dep})",
+              dep in declared, True)
         check(f"{name} ne depend pas du service optionnel {dep}",
               dep in optional, False)
 
