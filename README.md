@@ -83,7 +83,8 @@ no file anyone can forget to add alongside a new service.
 | `DOWNLOADS_DIR` · `MOVIES_DIR` · `TV_DIR` | **derived** from `MEDIA_ROOT` | `/media/data/Downloads` |
 | `TRANSCODE_DIR` | wizard | `/media/backup/.transcode` |
 | `COMPOSE_FILE` | `/dev/dri` present or not | `docker-compose.yml:docker-compose.qsv.yml` |
-| `COMPOSE_PROFILES` | wizard (`nvenc_node`) | `nvenc` |
+| `COMPOSE_PROFILES` | wizard (`nvenc_node`, `usenet`) | `nvenc` |
+| `PLEX_CLAIM` | wizard (`plex_claim`, optional) | — |
 | `VIDEO_GID` · `RENDER_GID` | target's `/etc/group` | `44` · `105` |
 | `RADARR_API_KEY` · `SONARR_API_KEY` · `PROWLARR_API_KEY` | harvested by `activate` | — |
 | `BAZARR_API_KEY` · `TAUTULLI_API_KEY` · `OVERSEERR_API_KEY` | **by hand**, Settings > General | — |
@@ -230,11 +231,12 @@ docker compose config              # validate the merged compose files
 
 Every service carries a `com.centurylinklabs.watchtower.enable: true` label,
 kept for the name only — the updater reading it is `mqtt-system-agent`
-(`packages/mqtt`, `src/features/updates/`), not Watchtower. It replays each
-container's own compose files and recreates one service at a time with
-`--no-deps`, and never starts a container that is currently stopped. See
-`CLAUDE.md`, "Container Updates", before running a global `docker compose up
--d` or `restart` by hand.
+(`packages/mqtt`, `src/features/updates/`), not Watchtower. Since its
+2026-09-28 fix, it replays each container's own compose files and recreates
+one service at a time with `--no-deps`, and never starts a container that is
+currently stopped — an older version could still recreate a container with a
+plain `up`, dropping the QSV overlay. See `CLAUDE.md`, "Container Updates",
+before running a global `docker compose up -d` or `restart` by hand.
 
 ## License
 

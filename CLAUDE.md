@@ -73,10 +73,14 @@ directory and that no Radarr/Sonarr root folder reports `accessible=false`;
 if either trips, the run changes nothing at all and exits 1. The 24h
 Downloads purge itself only runs when **every** instance's queue is trusted
 (`stack/maintenance/queue_trust.py`): its download clients must pass `POST
-/api/v3/downloadclient/testall` (a warning does not count as a failure) both
-before and after a forced `RefreshMonitoredDownloads`, and `GET
-/api/v3/health` must report neither `DownloadClientStatusCheck` nor
-`DownloadClientCheck`. Radarr/Sonarr serve the queue from memory — empty
+/api/v3/downloadclient/testall` both before and after a forced
+`RefreshMonitoredDownloads`, and `GET /api/v3/health` must report neither
+`DownloadClientStatusCheck` nor `DownloadClientCheck`. A failure the API
+marks as a warning would pass testall — but Radarr/Sonarr serialise every
+testall failure as the base `ValidationFailure` type today, which drops that
+marker, so in practice any testall warning currently counts as a failure and
+skips the purge; the run records it, and `OnFailure=` can alert on it.
+Radarr/Sonarr serve the queue from memory — empty
 right after a restart, and missing every download of a client that is down
 or backed off — so purging on an untrusted queue once deleted a completed,
 unimported 36.8 GB download (audit C2). Queue rows that were actually read
@@ -321,6 +325,13 @@ docker compose up --no-start --no-deps tdarr-node
 The console package's own libvirt hooks stop `tdarr-node-nvenc` and
 `tdarr-node` when the VM starts and `start` (never `up`) them again when it
 stops.
+
+These guarantees hold since the 2026-09-28 fixes in `mqtt-system-agent` and in
+the `console` package's libvirt hooks. An older version of either can still
+recreate a container with an explicit `-f` or a plain `up` instead of
+`--no-deps`/`start`, which drops the QSV overlay and can start the Tdarr
+nodes mid-game — check `docker inspect` after an update to confirm which
+version actually ran.
 
 ## Modification Guidelines
 
