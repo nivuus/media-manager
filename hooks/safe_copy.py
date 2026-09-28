@@ -51,14 +51,14 @@ ENV_BASENAME = ".env"
 # refuses anything that exists but is not a directory. Together, opening
 # (parent_fd, name) with these flags is the one check that cannot be raced:
 # there is no path left to resolve again after the kernel has decided.
-_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _TMP_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 
 # The deploy dir ITSELF is opened following a symlink (no O_NOFOLLOW): it is
 # root-controlled and no compose bind mount reaches it, only subdirectories
 # below it do, so an operator may legitimately symlink it to another disk
 # (Ruling 24). Every component below it keeps O_NOFOLLOW.
-_DEST_ROOT_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+DEST_ROOT_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
 
 
 def git_tracked_stack_files(pkg_dir):
@@ -192,10 +192,10 @@ def _open_dir_component(parent_fd, name):
     as-is: only the caller knows the full path so far, and turns it into a
     message that names it and says why (see _open_dest_dir_fd).
     """
-    return os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
+    return os.open(name, DIR_FLAGS, dir_fd=parent_fd)
 
 
-def _refuse_component(display_path, exc):
+def refuse_component(display_path, exc):
     """Turn a write-time ELOOP/ENOTDIR into a clear, path-naming refusal.
 
     The refusal itself already happened — the kernel's own O_NOFOLLOW |
@@ -232,7 +232,7 @@ def _open_dest_dir_fd(dest_root, rel_dir):
     """Walk from dest_root down to a file's own directory, one path
     component at a time, entirely through directory file descriptors.
 
-    dest_root itself is opened FOLLOWING a symlink (_DEST_ROOT_FLAGS, no
+    dest_root itself is opened FOLLOWING a symlink (DEST_ROOT_FLAGS, no
     O_NOFOLLOW): it is the deploy dir, fixed and root-controlled before this
     hook ever runs (see copy_stack), not something a container's bind mount
     reaches — every mount targets a subdirectory below it, never the deploy
@@ -243,7 +243,7 @@ def _open_dest_dir_fd(dest_root, rel_dir):
     instead, with O_NOFOLLOW, which is what actually enforces the
     no-symlink guarantee.
     """
-    dir_fd = os.open(dest_root, _DEST_ROOT_FLAGS)
+    dir_fd = os.open(dest_root, DEST_ROOT_FLAGS)
     try:
         if rel_dir:
             current_path = dest_root
@@ -253,7 +253,7 @@ def _open_dest_dir_fd(dest_root, rel_dir):
                     next_fd = _ensure_dir_component(dir_fd, part)
                 except OSError as exc:
                     if exc.errno in (errno.ELOOP, errno.ENOTDIR):
-                        _refuse_component(current_path, exc)
+                        refuse_component(current_path, exc)
                     raise
                 os.close(dir_fd)
                 dir_fd = next_fd

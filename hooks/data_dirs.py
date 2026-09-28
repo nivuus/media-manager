@@ -29,7 +29,7 @@ directory this hook creates; an existing one keeps the operator's mode.
 import errno
 import os
 
-from safe_copy import _DIR_FLAGS, _DEST_ROOT_FLAGS, _refuse_component
+from safe_copy import DIR_FLAGS, DEST_ROOT_FLAGS, refuse_component
 
 # Relative to the deploy dir -> mode of the directory when it is created.
 # 0750: the service user owns it, its group may read, nobody else.
@@ -45,10 +45,10 @@ def _ensure_owned_dir(root_fd, dest, name, mode, uid, gid):
     except FileExistsError:
         created = False
     try:
-        fd = os.open(name, _DIR_FLAGS, dir_fd=root_fd)
+        fd = os.open(name, DIR_FLAGS, dir_fd=root_fd)
     except OSError as exc:
         if exc.errno in (errno.ELOOP, errno.ENOTDIR):
-            _refuse_component(os.path.join(dest, name), exc)
+            refuse_component(os.path.join(dest, name), exc)
         raise
     try:
         if created:
@@ -63,7 +63,7 @@ def _ensure_owned_dir(root_fd, dest, name, mode, uid, gid):
 def ensure_data_dirs(dest, uid, gid, dirs=None):
     """Create each declared directory under dest and give it to uid:gid."""
     dirs = NON_ROOT_DATA_DIRS if dirs is None else dirs
-    root_fd = os.open(dest, _DEST_ROOT_FLAGS)
+    root_fd = os.open(dest, DEST_ROOT_FLAGS)
     try:
         for name, mode in dirs.items():
             _ensure_owned_dir(root_fd, dest, name, mode, uid, gid)
