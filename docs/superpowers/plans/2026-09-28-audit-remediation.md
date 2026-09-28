@@ -272,3 +272,85 @@ Files: `hooks/install.py`, `hooks/activate.py`, their tests, the units.
   advice (check devices with `docker inspect`, not `grep COMPOSE_FILE`), the
   Watchtower section, and the license (PolyForm Noncommercial 1.0.0, see
   `LICENSE.md`).
+
+## As built
+
+The rulings recorded during implementation changed this plan on the points
+below; where a line here and a task above disagree, the line here is what
+was built. `CLAUDE.md` is the authoritative description of how the scripts
+and hooks behave; this plan is kept as the record of intent, not as a
+specification.
+
+- **R1 (Task 2):** the orchestration lives in the importable
+  `maintenance/reset_error.py` (`run() -> int`); `stack/reset-error.py` is
+  only the imports and `sys.exit(run())`.
+- **R2 (Task 4.5):** a checkout is detected by `.git` as a directory or a
+  file (git worktrees), not a directory only.
+- **R3 (Task 2.4):** files-gone is decided from the filesystem, not from
+  messages: an import-pending row whose download (basename of `outputPath`)
+  is absent from every directory under `DOWNLOADS_DIR` is removed with
+  `removeFromClient=true`, `blocklist=false`, `skipRedownload=true`. With
+  the download present, "path does not exist" and the other
+  local-recoverable messages keep the manual import every run and are never
+  removed by age; "no files found" and the other unfixable messages are
+  removed and blocklisted as before.
+- **R6 (Task 2):** the default timeout is `(10, 60)`, but the two
+  manual-import calls keep a 120 s read timeout (the lookup scans and
+  ffprobes the download).
+- **R7 (Task 2.1):** a queue answer whose `totalRecords` exceeds the rows
+  returned counts as unreadable: failure recorded, purge skipped.
+- **R8 → R10 (Task 2):** before any rule runs, a storage guard requires
+  `DOWNLOADS_DIR` to be a directory and no Radarr/Sonarr root folder to
+  report `accessible=false` (an unreadable `rootfolder` endpoint counts as
+  failing). When it trips, the run takes no destructive or state-changing
+  action at all (no purge, no row removal, no manual import, no
+  dead-metadata deletion), records a failure and exits 1.
+- **R11 (Task 2.1):** a successful queue read is not enough to protect the
+  purge. The queue counts only when `downloadclient/testall` is all valid
+  and `health` has no download-client entry, a `RefreshMonitoredDownloads`
+  posted by the script completes within a bounded wait, the queue is read
+  after it, and the client checks pass again after the read; otherwise the
+  purge is skipped and a failure recorded (rows read are still processed).
+- **R12 (Task 2.4):** unknown presence (Downloads listing failed, or no
+  `outputPath`) only withholds files-gone; every other import-pending rule
+  still applies; a listing failure is recorded.
+- **R13 (Task 2, extends R11):** `health` also blocks on source
+  `DownloadClientCheck`, not only `DownloadClientStatusCheck`.
+- **R14 (Task 2):** no `CheckHealth` command; the client checks stay
+  `testall` + `health`, before and after the read.
+- **R15 + R16 (Task 2):** a `testall` item whose failures are all warnings
+  would count as valid, but the API does not serialise the warning marker
+  today, so every `testall` warning is treated as an error and skips the
+  purge, naming the client and message.
+- **R17 (Task 3):** update-wanted uses the default `(10, 60)` timeout for
+  the missing-list fetch and the search command, not the old 180 s / 120 s.
+- **R18 (Task 4.5):** `git ls-files -z stack/` runs as
+  `git -c safe.directory=<package dir> -c core.fsmonitor=false -C <package dir>`,
+  and a non-zero exit fails the install; there is never a fallback to
+  copying the tree. The export mode (no `.git`) copies the whole tree, still
+  never a `.env`, and the install refuses a symlink under `stack/`.
+- **R19 (Task 4.3):** a failing `up` fails the activate phase even when only
+  one service failed (e.g. `tdarr-node-nvenc` while the Windows VM holds the
+  GPU); the engine retries the phase.
+- **R21 (Task 4):** every write under the deploy tree goes through a
+  directory-fd path (`O_DIRECTORY|O_NOFOLLOW` per component, `dir_fd`
+  mkdir/open/replace), so a symlink planted by a container is never
+  followed.
+- **R22 (Task 4):** existing directories under the deploy tree are no
+  longer re-stamped with the source's modes; new ones get the umask.
+- **R23 (Task 4.1):** the `OnFailure=` drop-in write stays path-based
+  (`/etc/systemd/system` is root-only).
+- **R24 (Task 4):** the deploy directory itself is opened following
+  symlinks; only components below it are `O_NOFOLLOW`.
+- **R25 (Task 4):** the temporary-name swap before `os.replace` is accepted:
+  root never writes, chmods or utimes through a planted symlink.
+- **R26 (Task 6):** the docs describe the updater's and the console hooks'
+  behaviour with a dated dependency note on the 2026-09-28 fixes in
+  `mqtt-system-agent` and the console libvirt hooks, and no branch names.
+- **R27 (Task 2.4, narrows R10 for one rule):** files-gone is only concluded
+  when `MOVIES_DIR` or `TV_DIR` is a non-empty directory; otherwise presence
+  is unknown (R12 applies) and a warning is logged, not a failure — Docker
+  recreates missing bind sources empty when the media disk is absent.
+- **R28 (Task 6):** a `Persistent=true` catch-up run at boot that reaches
+  Radarr/Sonarr before they listen exits 1 and alerts once without changing
+  anything; this is documented, not handled with a readiness loop.
