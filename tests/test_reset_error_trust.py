@@ -10,9 +10,9 @@ succeeded. The timer is Persistent=true, so a missed 06:00 run fires at boot,
 exactly when the queues are cold.
 
 Per instance the run checks the clients (testall passes for a non-empty list
-and health reports no DownloadClientStatusCheck), refreshes the queue and
-waits for the command to complete, reads the queue, then checks the clients
-again. When a step fails the purge is skipped, a failure is recorded and the
+and health reports neither DownloadClientStatusCheck nor DownloadClientCheck),
+refreshes the queue and waits for the command to complete, reads the queue,
+then checks the clients again. When a step fails the purge is skipped, a failure is recorded and the
 run exits 1; the rows that were read are still processed, since the rows
 present are real and only absence is unreliable. The refresh is polled on a
 fake clock: no case waits.
@@ -70,10 +70,20 @@ TESTALL_REJECTED = [
         {"propertyName": "", "errorMessage": "Connection refused (rdtclient:6500)",
          "attemptedValue": None, "severity": "error"}]},
 ]
-# What health reports for a download client the provider back-off blocked.
-BLOCKED = {"id": 3, "source": "DownloadClientStatusCheck", "type": "error",
-           "message": "All download clients are unavailable due to failures",
-           "wikiUrl": "https://wiki.servarr.com/radarr/system#download-clients-are-unavailable-due-to-failures"}
+# What health reports for a download client that cannot feed the queue:
+# blocked by the provider back-off, failing to list its downloads, or no
+# client available at all.
+BLOCKING = [
+    {"id": 3, "source": "DownloadClientStatusCheck", "type": "error",
+     "message": "All download clients are unavailable due to failures",
+     "wikiUrl": "https://wiki.servarr.com/radarr/system#download-clients-are-unavailable-due-to-failures"},
+    {"id": 4, "source": "DownloadClientCheck", "type": "error",
+     "message": "Unable to communicate with RDTClient. Connection refused (rdtclient:6500)",
+     "wikiUrl": "https://wiki.servarr.com/radarr/system#unable-to-communicate-with-download-client"},
+    {"id": 5, "source": "DownloadClientCheck", "type": "warning",
+     "message": "No download client is available",
+     "wikiUrl": "https://wiki.servarr.com/radarr/system#no-download-client-is-available"},
+]
 # Other sources, as production shows them: source is the check's class name,
 # never localised, while the message is.
 OTHER_SOURCES = [
@@ -165,36 +175,28 @@ for label, answer, reason in UNNAMED:
         check(f"{label}: purge skipped", (downloads / UNREFERENCED).exists(), True)
         check(f"{label}: reason kept", warned(log, "radarr.test", reason), True)
 
-# --- Health reports a blocked client at one check only ------------------------
-with tempfile.TemporaryDirectory() as tmp, case("blocked before the refresh", failures):
-    downloads = make_downloads(tmp)
-    table = radarr_routes()
-    table[("GET", f"{RADARR}/health")] = [reply(200, [BLOCKED]), reply(200, [])]
-    code, api, log = run(table, downloads)
-    check("blocked before the refresh: exit status", code, 1)
-    check("blocked before the refresh: purge skipped",
-          (downloads / UNREFERENCED).exists(), True)
-    check("blocked before the refresh: reason named",
-          warned(log, "radarr.test", "DownloadClientStatusCheck"), True)
-    check("blocked before the refresh: no refresh",
-          commands(api, RADARR, "RefreshMonitoredDownloads"), [])
-    check("blocked before the refresh: rows still processed",
-          len(api.made("DELETE", f"{RADARR}/queue/104")), 1)
-
-with tempfile.TemporaryDirectory() as tmp, case("blocked after the read", failures):
-    downloads = make_downloads(tmp)
-    table = radarr_routes()
-    table[("GET", f"{RADARR}/health")] = [reply(200, []), reply(200, [BLOCKED])]
-    code, api, log = run(table, downloads)
-    check("blocked after the read: exit status", code, 1)
-    check("blocked after the read: purge skipped",
-          (downloads / UNREFERENCED).exists(), True)
-    check("blocked after the read: reason named",
-          warned(log, "radarr.test", "DownloadClientStatusCheck"), True)
-    check("blocked after the read: health read twice",
-          len(api.made("GET", f"{RADARR}/health")), 2)
-    check("blocked after the read: rows still processed",
-          len(api.made("DELETE", f"{RADARR}/queue/104")), 1)
+# --- Health reports a client that cannot feed the queue, at one check only ----
+for item in BLOCKING:
+    for when, bodies in (("before the refresh", [[item], []]),
+                         ("after the read", [[], [item]])):
+        label = f"{item['source']} {item['type']} {when}"
+        with tempfile.TemporaryDirectory() as tmp, case(label, failures):
+            downloads = make_downloads(tmp)
+            table = radarr_routes()
+            table[("GET", f"{RADARR}/health")] = [reply(200, body) for body in bodies]
+            code, api, log = run(table, downloads)
+            check(f"{label}: exit status", code, 1)
+            check(f"{label}: purge skipped", (downloads / UNREFERENCED).exists(), True)
+            check(f"{label}: reason named",
+                  warned(log, "radarr.test", item["source"], item["message"]), True)
+            check(f"{label}: rows still processed",
+                  len(api.made("DELETE", f"{RADARR}/queue/104")), 1)
+            if when == "before the refresh":
+                check(f"{label}: no refresh",
+                      commands(api, RADARR, "RefreshMonitoredDownloads"), [])
+            else:
+                check(f"{label}: health read twice",
+                      len(api.made("GET", f"{RADARR}/health")), 2)
 
 # --- No enabled download client: a queue no client feeds protects nothing ----
 with tempfile.TemporaryDirectory() as tmp, case("no client", failures):

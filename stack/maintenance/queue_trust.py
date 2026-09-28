@@ -12,10 +12,17 @@ cold.
 
 A queue is trusted when every step passes for its instance: the clients
 check, a queue refresh the run waits for, the read itself, and the clients
-check again. The clients check needs both halves: testall passing for a
-non-empty list of clients (it ignores the back-off, so it cannot see a
-blocked client), and health reporting no blocked client (it misses a client
-inside its first-failure grace period, which testall catches).
+check again. The clients check needs both halves. testall must pass for a
+non-empty list of clients: it tests every enabled client there and then,
+but ignores the back-off, so it cannot see a blocked one. Health must report
+neither DownloadClientStatusCheck, clients the back-off blocked (it misses a
+client inside its first-failure grace period), nor DownloadClientCheck, a
+client whose listing fails or no client at all (it reruns on every client
+failure, grace period or not).
+
+Health reruns those checks 5 s after the event that triggers them, so the
+second health read can predate a failure during this run's own refresh; the
+second testall still sees a client that is down by then.
 """
 import time
 from http import HTTPStatus
@@ -23,9 +30,12 @@ from http import HTTPStatus
 from maintenance.arr_api import ApiError, call_json, get_json, get_json_list, object_list
 from maintenance.queue_actions import fetch_queue
 
-# The health source of a download client blocked by the provider back-off:
-# the check's class name, which is never localised (its message is).
-BLOCKED_CLIENT_SOURCE = 'DownloadClientStatusCheck'
+# The health sources saying a download client cannot feed the queue: the
+# checks' class names, which are never localised (their messages are).
+# DownloadClientStatusCheck reports clients the provider back-off blocked;
+# DownloadClientCheck, a client whose listing fails ("unable to communicate",
+# an error) or that no client is available (a warning).
+BLOCKING_SOURCES = ('DownloadClientStatusCheck', 'DownloadClientCheck')
 
 TESTALL = 'downloadclient/testall'
 REFRESH_COMMAND = 'RefreshMonitoredDownloads'
@@ -57,8 +67,8 @@ def clients_problem(instance):
     except ApiError as error:
         return f'health unreadable ({error})'
     for item in health:
-        if item.get('source') == BLOCKED_CLIENT_SOURCE:
-            return f"download client blocked ({BLOCKED_CLIENT_SOURCE}: {item.get('message')})"
+        if item.get('source') in BLOCKING_SOURCES:
+            return f"download client unavailable ({item['source']}: {item.get('message')})"
     return None
 
 
