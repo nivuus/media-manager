@@ -29,6 +29,12 @@ from unittest import mock
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DEST_REL = "opt/nivuus/media-manager"
 
+# Needed early: the fix-round-2 race test below calls into safe_copy
+# in-process (to patch one of its internals), same as the git-argv-pinning
+# test further down — moved up here so both can use it.
+sys.path.insert(0, str(REPO / "hooks"))
+import safe_copy  # noqa: E402
+
 failures = []
 
 
@@ -288,6 +294,55 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     check("symlinked destination file: victim untouched",
           victim.read_text(), "original victim content\n")
 
+# --- Root writes never follow symlinks: a component swapped in DURING the
+# routine's own write, not before it (fix round 2, item A) -----------------
+# The re-review demonstrated two races: shutil.copystat() and makedirs() /
+# mkstemp() / os.replace() all take a path and re-resolve it, so a container
+# watching its writable directory can swap a symlink in between the ancestor
+# check and the actual write. Reproduced deterministically here (no real
+# concurrency needed): a transparent spy on _ensure_dir_component performs
+# the swap itself, then calls straight through to the real function, right
+# as the routine is about to open that exact component — the narrowest
+# possible window. The fix must refuse this at that exact moment (the open()
+# call itself, via O_NOFOLLOW | O_DIRECTORY), not merely at some earlier
+# check that this swap happens after.
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    (pkg / "stack" / "tdarr" / "server").mkdir(parents=True)
+    (pkg / "stack" / "tdarr" / "server" / "marker.txt").write_text(
+        "expected content\n")
+    git_commit_tracked(pkg, "stack/env.template", "stack/docker-compose.yml",
+                       "stack/tdarr/server/marker.txt")
+
+    dest = pathlib.Path(root) / DEST_REL
+    (dest / "tdarr" / "server").mkdir(parents=True)  # a real dir, like after a prior install
+    victim = pathlib.Path(root) / "victim"
+    victim.mkdir()
+
+    real_ensure = safe_copy._ensure_dir_component
+    swapped = []
+
+    def _swap_then_ensure(parent_fd, name):
+        if name == "server" and not swapped:
+            swapped.append(True)
+            (dest / "tdarr" / "server").rmdir()
+            (dest / "tdarr" / "server").symlink_to(victim)
+        return real_ensure(parent_fd, name)
+
+    raised = None
+    with mock.patch("safe_copy._ensure_dir_component", side_effect=_swap_then_ensure):
+        try:
+            safe_copy.copy_stack(str(pkg), str(pkg / "stack"), str(dest))
+        except RuntimeError as exc:
+            raised = exc
+
+    check("mid-routine swap: refused", raised is not None, True)
+    check("mid-routine swap: victim untouched",
+          sorted(p.name for p in victim.iterdir()), [])
+    check("mid-routine swap: swap itself left in place, not written through",
+          (dest / "tdarr" / "server").is_symlink(), True)
+
 # --- A failing git command fails the install loudly, never a fallback -----
 # Ruling 18: git 2.47 on the reference host refuses a repository it does not
 # own when run as root ("dubious ownership"). Whatever the reason, a
@@ -314,9 +369,6 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
 # install runs as root), unless safe.directory names it explicitly. The real
 # git binary still runs here (a transparent spy, not a mock) — only the argv
 # it was called with is pinned.
-sys.path.insert(0, str(REPO / "hooks"))
-import safe_copy  # noqa: E402
-
 _real_run = subprocess.run
 _git_calls = []
 

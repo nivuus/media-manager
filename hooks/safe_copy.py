@@ -4,19 +4,50 @@
 install.py runs as root and writes into a tree that containers mount
 read-write in places — the Tdarr container bind-mounts
 tdarr/server/Tdarr/Plugins/... read-write (stack/docker-compose.yml), and
-tracked files land there. A container that plants a symlink ahead of time
-must not be able to redirect a root-run reinstall's write anywhere else on
-the host: every source is validated before anything is written, every
-directory component between the deploy dir and a file is checked with
-lstat before it is created or entered, and every destination write replaces
-whatever sits at the final path rather than opening it.
+tracked files land there. A container that plants a symlink must not be
+able to redirect a root-run reinstall's write anywhere else on the host.
+
+What is guaranteed, and how:
+- every source is validated before anything is written: a symlinked source
+  is refused, a tracked file missing from the working tree is refused, both
+  checked for every file before the first write (_validate_sources);
+- every destination path's existing components are lstat-checked before the
+  first write too (_validate_destinations) — an all-or-nothing pre-flight
+  that fails fast on the common case, but is NOT itself proof against a
+  change made after it runs (it re-resolves paths, like any lstat-then-act
+  check);
+- the actual, race-proof enforcement happens at write time, per file
+  (_write_file): every destination directory component is opened one at a
+  time through a directory file descriptor with O_NOFOLLOW | O_DIRECTORY,
+  which the kernel itself refuses on a symlink or a non-directory — opening
+  by (parent_fd, name) leaves no path string for anything to re-resolve
+  after the refusal is decided. The temp file a write goes through is
+  created the same way (O_EXCL | O_NOFOLLOW, dir_fd-relative, never
+  tempfile.mkstemp(), which only takes a path), its mode and times are set
+  through the open fd rather than shutil.copystat()'s by-path chmod/utime —
+  the exact gap the re-review used to swap a symlink in — and the final
+  os.replace() takes both sides as (dir_fd, name) pairs so it can never be
+  pointed anywhere else either. xattrs are not copied: plain copy2()
+  semantics (content, mode, mtime) are all that is promised.
+- an export's directory walk (no .git) refuses a symlinked directory
+  outright instead of silently skipping it, which is os.walk()'s own
+  behaviour for a symlinked entry in dirnames when followlinks=False.
 """
+import errno
 import os
+import secrets
 import shutil
+import stat
 import subprocess
-import tempfile
 
 ENV_BASENAME = ".env"
+
+# O_NOFOLLOW refuses a symlink at the final path component; O_DIRECTORY
+# refuses anything that exists but is not a directory. Together, opening
+# (parent_fd, name) with these flags is the one check that cannot be raced:
+# there is no path left to resolve again after the kernel has decided.
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+_TMP_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 def git_tracked_stack_files(pkg_dir):
@@ -47,12 +78,18 @@ def git_tracked_stack_files(pkg_dir):
 def _walk_stack_files(stack_dir):
     """Every file's path relative to stack_dir, for a git-archive export.
 
-    followlinks=False: a symlinked subdirectory (none exists in stack/
-    today) is not descended into, matching the checkout mode's refusal of a
-    symlinked source rather than silently reading through it.
+    A symlinked subdirectory is refused outright, not silently skipped:
+    left alone, os.walk(followlinks=False) still lists a symlinked entry in
+    dirnames, just without descending into it, which would make an export
+    succeed with content quietly missing instead of failing the way the
+    checkout mode's source check refuses a symlinked file.
     """
     paths = []
-    for dirpath, _dirnames, filenames in os.walk(stack_dir, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(stack_dir, followlinks=False):
+        for name in dirnames:
+            if os.path.islink(os.path.join(dirpath, name)):
+                rel = os.path.relpath(os.path.join(dirpath, name), stack_dir)
+                raise RuntimeError(f"refusing a symlinked directory: {rel}")
         rel_dir = os.path.relpath(dirpath, stack_dir)
         for name in filenames:
             rel = name if rel_dir == os.curdir else os.path.join(rel_dir, name)
@@ -80,14 +117,16 @@ def _validate_sources(stack_dir, relpaths):
 
 
 def _check_no_symlink_ancestors(dest_root, target):
-    """Raise if any directory between dest_root and target's parent is a symlink.
+    """Raise if any directory between dest_root and target's parent is
+    already a symlink, at the moment this specific call runs.
 
-    Intermediate symlinks are always resolved by the kernel for path-based
-    calls (mkdir, open, ...) — there is no way to refuse to follow one short
-    of checking each component by hand first. This is what stops a
-    container with a read-write bind mount under the deploy tree (Tdarr's
-    tdarr/server/Tdarr/Plugins/...) from redirecting a root-run reinstall's
-    write anywhere else on the host, by planting a symlink ahead of time.
+    This is a path-string, lstat-based check: like any check performed on a
+    path rather than an open descriptor, something swapped in immediately
+    after it returns would not be caught by it. It exists to fail fast on
+    the common case (nothing tampered with); the actual guarantee against a
+    swap made after this check runs is _write_file's own directory-fd walk,
+    which re-verifies every component again, independently, right as it
+    opens each one — there is no path left to re-resolve there, unlike here.
     """
     rel_dir = os.path.dirname(os.path.relpath(target, dest_root))
     if not rel_dir:
@@ -99,27 +138,117 @@ def _check_no_symlink_ancestors(dest_root, target):
             raise RuntimeError(f"refusing to write through a symlink: {current}")
 
 
-def _replace_file(source, target):
-    """Copy source to target, atomically, keeping copy2 semantics.
+def _open_dir_component(parent_fd, name):
+    """Open `name` under parent_fd, refusing anything but a real directory.
 
-    Written through a temp file in target's own directory, then
-    os.replace()d: a symlink already sitting at `target` (the final path
-    component — the one thing _check_no_symlink_ancestors does not cover,
-    since it is the file being written, not a directory on the way to it)
-    is replaced as a directory entry, never opened and written through.
+    O_NOFOLLOW + O_DIRECTORY make the kernel itself refuse a symlink or a
+    plain file at `name` — observed on this host as ENOTDIR for both cases
+    (a symlink-to-directory and a plain file alike), though POSIX leaves
+    room for ELOOP too, so both are treated as the same refusal. Opening by
+    (parent_fd, name) rather than resolving a path string is what makes
+    this uncircumventable: there is no path left for anything to swap
+    underneath between "checked" and "used", because checking IS using.
     """
-    directory = os.path.dirname(target)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=directory, prefix=f"{os.path.basename(target)}.tmp-")
     try:
-        with os.fdopen(fd, "wb") as dst, open(source, "rb") as src:
-            shutil.copyfileobj(src, dst)
-        shutil.copystat(source, tmp_path)
-        os.replace(tmp_path, target)
-    except BaseException:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        return os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise RuntimeError(
+                f"refusing to write through a symlink: {name}") from exc
         raise
+
+
+def _ensure_dir_component(parent_fd, name):
+    """Open `name` under parent_fd, creating it first if it does not exist.
+
+    mkdir and the open that follows are two syscalls, not one atomic step,
+    but a symlink planted in that gap is still caught: the open uses the
+    same O_NOFOLLOW | O_DIRECTORY as an already-existing component, so a
+    swap made in between fails loudly instead of being followed. Mode 0o777
+    (subject to umask, exactly like os.makedirs()'s own default) is used
+    for a newly created directory — new directories keep the process
+    umask, existing ones are never re-stamped, by design (see task-4's
+    fix-round-2 brief, "not in scope").
+    """
+    try:
+        os.mkdir(name, 0o777, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    return _open_dir_component(parent_fd, name)
+
+
+def _open_dest_dir_fd(dest_root, rel_dir):
+    """Walk from dest_root down to a file's own directory, one path
+    component at a time, entirely through directory file descriptors.
+
+    dest_root itself is opened by path: it is the deploy dir, fixed and
+    root-controlled before this hook ever runs (see copy_stack), not
+    something a container's bind mount reaches. Every component below it —
+    the part a container CAN reach, such as Tdarr's own
+    tdarr/server/Tdarr/Plugins/... — goes through _ensure_dir_component
+    instead, which is what actually enforces the no-symlink guarantee.
+    """
+    dir_fd = os.open(dest_root, _DIR_FLAGS)
+    try:
+        if rel_dir:
+            for part in rel_dir.split(os.sep):
+                next_fd = _ensure_dir_component(dir_fd, part)
+                os.close(dir_fd)
+                dir_fd = next_fd
+        return dir_fd
+    except BaseException:
+        os.close(dir_fd)
+        raise
+
+
+def _create_temp_component(dir_fd, basename):
+    """A uniquely-named temp file under dir_fd, created with O_EXCL.
+
+    tempfile.mkstemp() only takes a path, not a dir_fd, so it cannot be
+    used here without reintroducing the exact path-based race this module
+    exists to close. This is its dir_fd-relative equivalent: the same
+    create-exclusive-and-retry-on-collision approach mkstemp uses
+    internally, just addressed by (dir_fd, name) instead of a path string.
+    """
+    for _ in range(100):
+        name = f".{basename}.tmp-{secrets.token_hex(8)}"
+        try:
+            fd = os.open(name, _TMP_FLAGS, 0o600, dir_fd=dir_fd)
+            return name, fd
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"could not create a temp file for {basename}")
+
+
+def _write_file(dest_root, rel, source):
+    """Copy `source` to `dest_root/rel`, entirely through directory file
+    descriptors: every path component is opened or created and the file
+    itself is finally replaced by (dir_fd, name), never by a path string
+    that could be re-resolved after being checked. See the module
+    docstring for what this closes and why.
+    """
+    rel_dir, name = os.path.split(rel)
+    dir_fd = _open_dest_dir_fd(dest_root, rel_dir)
+    try:
+        tmp_name, fd = _create_temp_component(dir_fd, name)
+        try:
+            src_stat = os.stat(source)
+            with open(source, "rb") as src, os.fdopen(fd, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+                dst.flush()
+                os.fchmod(dst.fileno(), stat.S_IMODE(src_stat.st_mode))
+                os.utime(dst.fileno(),
+                         ns=(src_stat.st_atime_ns, src_stat.st_mtime_ns))
+                os.fsync(dst.fileno())
+            os.replace(tmp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp_name, dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
+            raise
+    finally:
+        os.close(dir_fd)
 
 
 def copy_stack(pkg_dir, stack_dir, dest):
@@ -142,10 +271,16 @@ def copy_stack(pkg_dir, stack_dir, dest):
                if os.path.basename(rel) != ENV_BASENAME]
 
     _validate_sources(stack_dir, relpaths)
+    # dest itself (and any of ITS OWN missing ancestors, e.g. a fresh
+    # root/opt/nivuus/ on a first install) sits above the threat model this
+    # module defends against: nothing a container's bind mount reaches
+    # lives above it, only inside it. A plain, path-based makedirs is
+    # enough here; every directory BELOW dest goes through _write_file's
+    # directory-fd walk instead.
+    os.makedirs(dest, exist_ok=True)
 
     for rel in relpaths:
         source = os.path.join(stack_dir, rel)
         target = os.path.join(dest, rel)
         _check_no_symlink_ancestors(dest, target)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        _replace_file(source, target)
+        _write_file(dest, rel, source)
