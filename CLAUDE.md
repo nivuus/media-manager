@@ -26,6 +26,13 @@ Quatre conséquences qui priment sur tout le reste de ce fichier :
   exclusivité ; un claim identique ici rendrait les deux mutuellement
   exclusifs, alors que le node NVENC partage justement la carte avec la VM
   Windows via les hooks libvirt de `console`.
+- **Un service non-root déclare son répertoire de données dans
+  `hooks/data_dirs.py`** (`NON_ROOT_DATA_DIRS`). Docker crée un point de
+  montage absent en root : Maintainerr, qui tourne sous `user: PUID:PGID` sans
+  gérer PUID/PGID lui-même, ne pourrait pas écrire `./maintainerr` et
+  échouerait au démarrage. Le hook `install` crée donc le répertoire (0750,
+  PUID/PGID rendus) et corrige le propriétaire du répertoire seul, jamais
+  récursivement ni à travers un lien symbolique.
 
 Les chemins ont changé : le compose, les trois scripts de maintenance et les
 assets Tdarr sont sous `stack/`. Le déploiement est `/opt/nivuus/media-manager`
@@ -142,7 +149,10 @@ least-recently-watched movies/series once free space drops under a
 threshold, using Tautulli's watch history. The package still ships
 `media-manager-cleanup.timer`, but `activate` deliberately does not arm it —
 disabled on the reference host since 2026-09-28, pending a Maintainerr pilot
-to replace it. Known defects: it can overshoot the threshold (its post-delete
+to replace it: **Maintainerr** (`maintainerr`, `127.0.0.1:6246`) is being
+piloted in a no-action mode, configured by the operator through its API. Until
+the pilot ends, `media_cleanup.py` stays shipped and unarmed; it goes away only
+once Maintainerr has proven itself. Known defects: it can overshoot the threshold (its post-delete
 check re-reads real disk usage right away, before Radarr/Sonarr's own file
 deletion is necessarily reflected on disk); a re-requested title is ranked
 first for deletion again (Tautulli watch data is keyed by title/year and
@@ -248,6 +258,14 @@ too (`jobs.radarr-scan.schedule`).
 - Transient `ProviderUpdater` errors (AllDebrid "database error", 10s HTTP
   timeout) are normal and self-healing — the loop retries on the next pass. They
   are not the cause of stalled queues.
+
+### Maintainerr
+Rule-based media cleanup (Plex, Radarr, Sonarr, Tautulli, Seerr), image
+`ghcr.io/maintainerr/maintainerr`, UI/API on port 6246, data in `./maintainerr`
+(`/opt/data`). It runs as the compose `user:` (`PUID:PGID`), not root, which is
+why the install hook owns that directory (see "Ce dépôt est un package
+Nivuus"). Healthcheck: `curl` on `/api/health/live` (the image is Alpine with
+curl, no wget). Not in the QSV overlay. See "Disk Cleanup" for its role.
 
 ### Data Flow
 ```
@@ -422,6 +440,9 @@ to its footprintId through `POST /api/v2/client/status-tables` with
 ## Security Notes
 
 - Seerr is **localhost-only** (`127.0.0.1:5055`)
+- Maintainerr is **localhost-only** (`127.0.0.1:6246`) and has **no
+  authentication** on its UI or API: anyone who can reach the port can delete
+  media through it. Never publish it on another interface.
 - Downloads via AllDebrid (no local P2P exposure)
 - User quotas in Seerr: 10 movies/TV per 7 days
 - API keys are configured via `.env` (not tracked in git)

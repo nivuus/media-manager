@@ -63,10 +63,10 @@ existing values and comments are left alone.
 |---|---|
 | `nivuus-package.yaml` | The manifest. `tier: userspace`, no `claims`, no `requires` |
 | `wizard.yaml` | The six questions the portal asks |
-| `hooks/` | `install.py` and `activate.py` — stdlib only, they run on a minimal Debian |
+| `hooks/` | `install.py`, `activate.py` and their helpers (`data_dirs.py` creates the data directory of services that do not run as root) — stdlib only, they run on a minimal Debian |
 | `stack/` | **The deployment directory, byte for byte.** Compose files, the three maintenance scripts (two are thin wrappers around `stack/maintenance/`), the Tdarr assets |
 | `systemd/` | The three service/timer pairs that replace the crontab |
-| `tests/` | 18 standalone suites, run by `make test` |
+| `tests/` | 19 standalone suites, run by `make test` |
 
 `stack/` being the deployment directory verbatim is what spares the `install`
 hook a file list: from a git checkout it copies only the files git tracks
@@ -140,6 +140,7 @@ python3 media_cleanup.py --threshold 15  # custom threshold (15% free)
 | Service | Port(s) | Description |
 |---|---|---|
 | **Seerr** | 5055 | Request portal (localhost only) |
+| **Maintainerr** | 6246 | Rule-based media cleanup, piloted to replace `media_cleanup.py` (localhost only, no authentication) |
 | **Prowlarr** | 9696 | Indexer manager |
 | **FlareSolverr** | — | Cloudflare bypass for indexers |
 | **RDTClient** | 6500 | AllDebrid download client |
