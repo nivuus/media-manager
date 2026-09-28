@@ -18,7 +18,8 @@ from maintenance.arr_api import (ApiError, Failures, load_environment,
                                  missing_api_keys, radarr_instances,
                                  sonarr_instances)
 from maintenance.dead_metadata import remove_dead_entries
-from maintenance.downloads_purge import protected_names, purge
+from maintenance.downloads_purge import (download_present, names_under,
+                                         protected_names, purge)
 from maintenance.queue_actions import fetch_queue, manual_import, remove_queue_item
 from maintenance.queue_policy import classify_item, item_age_hours
 
@@ -47,8 +48,12 @@ def describe(item):
     return desc
 
 
-def process_queue(instance, records, now, failures):
-    """Classify and act on every row of one instance's queue."""
+def process_queue(instance, records, names, now, failures):
+    """Classify and act on every row of one instance's queue.
+
+    `names` is the Downloads listing from names_under(), or None when it could
+    not be made: presence is then unknown and no row is removed as files-gone.
+    """
     removed = 0
     recoverable = 0
     imported = 0
@@ -60,7 +65,8 @@ def process_queue(instance, records, now, failures):
         download_id = item.get('downloadId')
         if download_id and download_id in handled_download_ids:
             continue
-        action = classify_item(item, now)
+        action = classify_item(item, now,
+                               download_present=download_present(item, names))
         if action == 'keep':
             continue
 
@@ -73,7 +79,7 @@ def process_queue(instance, records, now, failures):
             log.info('[%s] kept, local problem to fix first: %s', instance, desc)
             continue
 
-        if action == 'try_import':
+        if action in ('try_import', 'try_import_recoverable'):
             try:
                 queued = manual_import(instance, item)
             except ApiError as error:
@@ -87,6 +93,13 @@ def process_queue(instance, records, now, failures):
                 if download_id:
                     handled_download_ids.add(download_id)
                 continue
+            if action == 'try_import_recoverable':
+                # Never removed while the local problem lasts: fixing it is
+                # what gets the download imported.
+                recoverable += 1
+                log.info('[%s] nothing importable until a local problem is fixed, '
+                         'kept: %s', instance, desc)
+                continue
             if item_age_hours(item, now) is not None:
                 # Datable: give it until STUCK_MAX_AGE_HOURS to become
                 # importable (the download client may still be moving files).
@@ -98,10 +111,19 @@ def process_queue(instance, records, now, failures):
             # forever, since every age-based rule needs a date to fire.
             action = 'remove_blocklist'
 
-        blocklist = action == 'remove_blocklist'
-        log.info('[%s] removing%s: %s', instance, ' + blocklist' if blocklist else '', desc)
+        if action == 'remove_files_gone':
+            # The release was fine, only its files vanished: no blocklist.
+            blocklist, skip_redownload = False, True
+            log.info('[%s] removing, its files are gone (not blocklisted): %s',
+                     instance, desc)
+        elif action == 'remove_blocklist':
+            blocklist, skip_redownload = True, False
+            log.info('[%s] removing + blocklist: %s', instance, desc)
+        else:
+            raise ValueError(f'unhandled queue action {action!r}')
         try:
-            remove_queue_item(instance, item['id'], blocklist=blocklist)
+            remove_queue_item(instance, item['id'], blocklist=blocklist,
+                              skip_redownload=skip_redownload)
         except ApiError as error:
             failures.record(f'[{instance}] cannot remove queue row {item["id"]}', error)
             continue
@@ -157,9 +179,18 @@ def run(environ):
         log.warning('Downloads purge skipped: a queue could not be read, '
                     'so the downloads it references are unknown.')
 
+    # What is still on disk decides which import-pending rows lost their files.
+    # Listed after the purge, so it shows what the processing will face.
+    try:
+        names = names_under(downloads_dir)
+    except OSError as error:
+        # Presence unknown: no row is removed as files-gone this run.
+        failures.record(f'Downloads directory {downloads_dir} cannot be listed', error)
+        names = None
+
     # The queues that were read are still processed.
     for instance, records in queues:
-        process_queue(instance, records, now, failures)
+        process_queue(instance, records, names, now, failures)
     remove_dead_entries(instances, failures)
 
     if failures.count:

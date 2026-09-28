@@ -48,15 +48,17 @@ def fetch_queue(instance):
     return records
 
 
-def remove_queue_item(instance, item_id, blocklist=False):
+def remove_queue_item(instance, item_id, blocklist=False, skip_redownload=False):
     """Delete a single queue item, removing its download from the client.
 
     blocklist=True tells Radarr/Sonarr to blocklist the release so it grabs a
     different one next time instead of re-grabbing the same broken release.
+    skip_redownload=True asks them not to search for a replacement right away.
     Raises ApiError when the row could not be removed.
     """
     call(instance, 'DELETE', f'queue/{item_id}',
-         params={'removeFromClient': True, 'blocklist': blocklist})
+         params={'removeFromClient': True, 'blocklist': blocklist,
+                 'skipRedownload': skip_redownload})
 
 
 def _blocking_rejection(candidate):

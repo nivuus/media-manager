@@ -1,4 +1,4 @@
-"""The Downloads directory: what the queues still reference, and the 24-hour purge."""
+"""The Downloads directory: what is still in it, what the queues reference, and the 24-hour purge."""
 import errno
 import logging
 import os
@@ -15,6 +15,38 @@ REQUIRED_SUBDIRS = ['tv-sonarr', 'radarr']
 def entry_name(path):
     """The name a queue path has in its parent directory."""
     return os.path.basename(str(path).rstrip('/'))
+
+
+def names_under(downloads_dir):
+    """Every file and directory name in the Downloads directory, at any depth.
+
+    Raises OSError when any directory cannot be listed: a name missing from a
+    partial listing proves nothing.
+    """
+    def unlistable(error):
+        raise error
+
+    names = set()
+    for _root, dirs, files in os.walk(downloads_dir, onerror=unlistable):
+        names.update(dirs)
+        names.update(files)
+    return names
+
+
+def download_present(item, names):
+    """Whether a queue row's download is still on disk.
+
+    True or False when `names`, from names_under(), settles it; None when it
+    cannot be known: no listing, or a row without an outputPath. The whole
+    tree is searched, not only the category subdirectories: SABnzbd files a
+    finished job under complete/<category>/, and a download wrongly taken for
+    a vanished one would be removed from its client.
+    """
+    output_path = item.get('outputPath')
+    if names is None or not output_path:
+        return None
+    name = entry_name(output_path)
+    return (name in names) if name else None
 
 
 def protected_names(records):

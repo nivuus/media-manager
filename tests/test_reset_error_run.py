@@ -2,10 +2,9 @@
 """reset-error's run, checked against a fake Radarr/Sonarr API and a real
 Downloads directory in a temporary tree.
 
-The fake stands in for requests.request, the network boundary, and answers
-with real requests.Response objects, so raise_for_status() and JSON parsing
-behave as they do in production. The purge is never mocked: whether it ran
-is read on the filesystem, from an old file no queue references.
+The fake (maintenance_fakes.py) stands in for requests.request, the network
+boundary. The purge is never mocked: whether it ran is read on the
+filesystem, from an old file no queue references.
 
 The rule that motivated this file (audit C2): with Radarr unreachable for
 7 days, the purge ran with an empty protection set and deleted a completed,
@@ -15,9 +14,6 @@ unit's OnFailure= alert never fired.
 Run: python3 tests/test_reset_error_run.py
 """
 import contextlib
-import http
-import json
-import logging
 import os
 import pathlib
 import shutil
@@ -38,6 +34,7 @@ sys.path.insert(0, str(STACK))
 import requests  # noqa: E402
 
 from maintenance import reset_error  # noqa: E402
+from maintenance_fakes import FakeApi, LogCapture, reply  # noqa: E402
 
 failures = []
 
@@ -69,58 +66,10 @@ with tempfile.TemporaryDirectory() as tmp:
     check("missing keys: no traceback", "Traceback" in output, False)
 
 
-# --- Fakes ----------------------------------------------------------------
+# --- Fixtures -------------------------------------------------------------
 RADARR = "http://radarr.test:7878/api/v3"
 SONARR = "http://sonarr.test:8989/api/v3"
-
-
-def reply(status=200, body=None, raw=None):
-    """A real requests.Response, as the API would send it."""
-    response = requests.Response()
-    response.status_code = status
-    response.reason = http.HTTPStatus(status).phrase
-    response.headers["Content-Type"] = "application/json; charset=utf-8"
-    response.encoding = "utf-8"
-    response._content = raw if raw is not None else json.dumps(body).encode()
-    return response
-
-
-class FakeApi:
-    """Stands in for requests.request: answers from a route table, keeps every call."""
-
-    def __init__(self, routes):
-        self.routes = routes
-        self.calls = []
-
-    def __call__(self, method, url, **kwargs):
-        self.calls.append((method, url, kwargs))
-        if (method, url) not in self.routes:
-            raise AssertionError(f"unexpected call: {method} {url}")
-        answer = self.routes[(method, url)]
-        if isinstance(answer, Exception):
-            raise answer
-        answer.url = url
-        return answer
-
-    def made(self, method, url):
-        """The keyword arguments of every call made to that route."""
-        return [kwargs for m, u, kwargs in self.calls if (m, u) == (method, url)]
-
-
-class LogCapture(logging.Handler):
-    """Keeps the run's log lines: shown only when a case fails."""
-
-    def __init__(self):
-        super().__init__(logging.INFO)
-        self.lines = []
-
-    def emit(self, record):
-        self.lines.append(f"{record.levelname} {record.getMessage()}")
-
-
-CAPTURE = LogCapture()
-logging.getLogger().addHandler(CAPTURE)
-logging.getLogger().setLevel(logging.INFO)
+CAPTURE = LogCapture().install()
 
 
 def iso(hours_ago):
@@ -205,9 +154,9 @@ def environment(downloads):
     }
 
 
-def routes(radarr_queue=None, sonarr_queue=None, **overrides):
+def routes(radarr_queue=None, sonarr_queue=None):
     """Every route a run uses, answering as a healthy stack would."""
-    table = {
+    return {
         ("GET", f"{RADARR}/queue"): reply(200, queue_page(
             [DOWNLOADING] if radarr_queue is None else radarr_queue)),
         ("GET", f"{SONARR}/queue"): reply(200, queue_page(
@@ -216,8 +165,6 @@ def routes(radarr_queue=None, sonarr_queue=None, **overrides):
         ("GET", f"{RADARR}/movie"): reply(200, []),
         ("GET", f"{SONARR}/series"): reply(200, []),
     }
-    table.update({key: value for key, value in overrides.get("extra", {}).items()})
-    return table
 
 
 def run(table, downloads, patches=()):
@@ -377,6 +324,123 @@ with tempfile.TemporaryDirectory() as tmp, case("missing Downloads"):
     code, _, _ = run(routes(), missing)
     check("missing Downloads: exit status", code, 1)
     check("missing Downloads: not created", missing.exists(), False)
+
+# --- Files gone: decided from the Downloads directory ---------------------
+# An import-pending row whose download is no longer on disk is removed from
+# the client WITHOUT blocklisting: the release was fine, its files vanished.
+VANISHED = "Gone.Movie.2019.MULTi.1080p.WEB.x264-GRP"
+IMPORT_VANISHED = {
+    "id": 104, "movieId": 814, "title": VANISHED,
+    "status": "completed", "trackedDownloadStatus": "warning",
+    "trackedDownloadState": "importPending",
+    "statusMessages": [{"title": VANISHED, "messages": [
+        "One or more movies expected in this release were not imported or missing"]}],
+    "downloadId": "D4E5F60718293A4B5C6D7E8F901234567890ABCD",
+    "protocol": "torrent", "downloadClient": "RDTClient", "indexer": "YggTorrent",
+    "outputPath": f"/data/Downloads/radarr/{VANISHED}",
+    "size": 6_000_000_000, "sizeleft": 0, "added": iso(5),
+}
+# What Radarr answers /manualimport with for the download that is on disk.
+CANDIDATES = [{
+    "id": 1, "path": f"/data/Downloads/radarr/{PENDING}/movie.mkv",
+    "relativePath": "movie.mkv", "folderName": PENDING, "name": "movie",
+    "size": 8_000_000_000,
+    "movie": {"id": 813, "title": "Other Movie", "year": 2020},
+    "quality": {"quality": {"id": 7, "name": "Bluray-1080p"},
+                "revision": {"version": 1, "real": 0, "isRepack": False}},
+    "languages": [{"id": 2, "name": "French"}],
+    "releaseGroup": "GRP", "downloadId": IMPORT_PENDING["downloadId"],
+    "rejections": [],
+}]
+
+
+def import_routes():
+    table = routes(radarr_queue=[DOWNLOADING, IMPORT_PENDING, IMPORT_VANISHED])
+    table[("GET", f"{RADARR}/manualimport")] = reply(200, [])
+    table[("POST", f"{RADARR}/command")] = reply(
+        201, {"id": 4242, "name": "ManualImport", "status": "queued"})
+    table[("DELETE", f"{RADARR}/queue/103")] = reply(200, {})
+    table[("DELETE", f"{RADARR}/queue/104")] = reply(200, {})
+    return table
+
+
+with tempfile.TemporaryDirectory() as tmp, case("files gone"):
+    downloads = make_downloads(tmp)  # holds PENDING, not VANISHED
+    table = import_routes()
+    table[("GET", f"{RADARR}/manualimport")] = reply(200, CANDIDATES)
+    code, api, _ = run(table, downloads)
+    check("files gone: exit status", code, 0)
+    deletes = api.made("DELETE", f"{RADARR}/queue/104")
+    check("files gone: row removed once", len(deletes), 1)
+    if deletes:
+        check("files gone: removal parameters", deletes[0]["params"],
+              {"removeFromClient": True, "blocklist": False, "skipRedownload": True})
+    lookups = [kwargs["params"]["downloadId"]
+               for kwargs in api.made("GET", f"{RADARR}/manualimport")]
+    check("files gone: no manual import attempted",
+          IMPORT_VANISHED["downloadId"] in lookups, False)
+    # The download still on disk goes through the manual import instead.
+    check("download present: manual import looked up",
+          lookups, [IMPORT_PENDING["downloadId"]])
+    commands = api.made("POST", f"{RADARR}/command")
+    check("download present: import command sent", len(commands), 1)
+    if commands:
+        sent = commands[0]["json"]
+        check("download present: command", sent["name"], "ManualImport")
+        check("download present: file imported as its movie",
+              [(f["path"], f["movieId"]) for f in sent["files"]],
+              [(f"/data/Downloads/radarr/{PENDING}/movie.mkv", 813)])
+    check("download present: row not removed",
+          api.made("DELETE", f"{RADARR}/queue/103"), [])
+
+# A local problem keeps its row whatever the manual import finds: without a
+# date and with nothing importable it is not a ghost, and fixing the problem
+# is what gets it imported.
+DENIED = "Denied.Movie.2018.MULTi.1080p.WEB.x264-GRP"
+IMPORT_DENIED = dict(
+    IMPORT_PENDING, id=105, movieId=815, title=DENIED,
+    downloadId="E5F60718293A4B5C6D7E8F901234567890ABCDEF",
+    outputPath=f"/data/Downloads/radarr/{DENIED}",
+    statusMessages=[{"title": DENIED, "messages": [
+        "Failed to import movie, Permission denied"]}])
+with tempfile.TemporaryDirectory() as tmp, case("local problem"):
+    downloads = make_downloads(tmp)
+    # A folder with its file: an empty one would be purged as empty, and a
+    # download without files is rightly taken for a vanished one.
+    (downloads / "radarr" / DENIED).mkdir()
+    (downloads / "radarr" / DENIED / "movie.mkv").write_bytes(b"\0" * 16)
+    table = routes(radarr_queue=[DOWNLOADING, IMPORT_DENIED])
+    table[("GET", f"{RADARR}/manualimport")] = reply(200, [])
+    table[("DELETE", f"{RADARR}/queue/105")] = reply(200, {})
+    code, api, _ = run(table, downloads)
+    check("local problem: exit status", code, 0)
+    check("local problem: manual import attempted",
+          len(api.made("GET", f"{RADARR}/manualimport")), 1)
+    check("local problem: row kept", api.made("DELETE", f"{RADARR}/queue/105"), [])
+
+# Downloads cannot be listed: presence is unknown, nothing is concluded from
+# it, and the failure is recorded.
+with tempfile.TemporaryDirectory() as tmp, case("presence unknown"):
+    missing = pathlib.Path(tmp) / "Downloads"
+    code, api, _ = run(import_routes(), missing)
+    check("presence unknown: exit status", code, 1)
+    check("presence unknown: no files-gone removal",
+          api.made("DELETE", f"{RADARR}/queue/104"), [])
+    lookups = [kwargs["params"]["downloadId"]
+               for kwargs in api.made("GET", f"{RADARR}/manualimport")]
+    check("presence unknown: manual import attempted instead",
+          IMPORT_VANISHED["downloadId"] in lookups, True)
+
+# Only the listing fails. The purge walks the same tree, so in practice both
+# fail together and the purge's failure alone already sets the exit status;
+# failing the listing alone shows it is recorded in its own right.
+with tempfile.TemporaryDirectory() as tmp, case("listing fails"):
+    downloads = make_downloads(tmp)
+    code, api, _ = run(import_routes(), downloads, patches=[
+        ("maintenance.reset_error.names_under", PermissionError(13, "Permission denied"))])
+    check("listing fails: exit status", code, 1)
+    check("listing fails: no files-gone removal",
+          api.made("DELETE", f"{RADARR}/queue/104"), [])
 
 if failures:
     print("\n".join(failures))
