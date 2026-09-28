@@ -24,8 +24,13 @@ tier: userspace
 # demander masquerait le package sur des machines ou il fonctionne.
 
 apt:
-  - docker.io
-  - docker-compose-v2
+  # Docker is deliberately NOT declared here. `docker-compose-v2` does not
+  # exist as a package name on Debian, and `docker.io` conflicts with
+  # docker-ce: apt would remove Docker CE to satisfy it, taking down every
+  # other container on the reference host. Docker Engine with the compose v2
+  # plugin remains a prerequisite of this package, but hooks/activate.py's
+  # ensure_docker() checks for it directly (`docker compose version`) before
+  # the first compose call, instead of provisioning it through apt.
   # requests et dotenv : les trois scripts de maintenance en dependent, et ils
   # sont lances par des timers systemd des le premier boot.
   - python3-requests
