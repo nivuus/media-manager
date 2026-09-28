@@ -1,7 +1,8 @@
 """Fixtures for the tests of reset-error's run: a healthy stack, and how to run against it.
 
 The rows mirror what Radarr/Sonarr's /api/v3/queue returns, the routes answer
-as a healthy stack would, and the Downloads tree is real, in a temporary
+as a healthy stack would — download clients that pass their test, a queue
+refresh that completes — and the Downloads tree is real, in a temporary
 directory, so that the purge's effect is read on the filesystem. Not a test
 itself: the Makefile only runs the test_* files. Import it after setting
 sys.dont_write_bytecode, so that no __pycache__ lands in stack/ or tests/.
@@ -19,7 +20,7 @@ if str(STACK) not in sys.path:
     sys.path.insert(0, str(STACK))
 
 from maintenance import reset_error  # noqa: E402
-from maintenance_fakes import FakeApi, LogCapture, reply  # noqa: E402
+from maintenance_fakes import FakeApi, FakeClock, LogCapture, reply  # noqa: E402
 
 RADARR = "http://radarr.test:7878/api/v3"
 SONARR = "http://sonarr.test:8989/api/v3"
@@ -100,6 +101,10 @@ RADARR_ROOT = {"id": 1, "path": "/data/Movies", "accessible": True,
                "freeSpace": 1_234_567_890_000, "unmappedFolders": []}
 SONARR_ROOT = {"id": 1, "path": "/data/TV Shows", "accessible": True,
                "freeSpace": 1_234_567_890_000, "unmappedFolders": []}
+# What /api/v3/downloadclient/testall answers when every enabled client passes.
+TESTALL_PASSED = [{"id": 1, "isValid": True, "validationFailures": []}]
+# The id each instance gives the RefreshMonitoredDownloads command.
+REFRESH_ID = {RADARR: 4242, SONARR: 5151}
 # What Radarr answers /manualimport with for the pending download on disk.
 CANDIDATES = [{
     "id": 1, "path": f"/data/Downloads/radarr/{PENDING}/movie.mkv",
@@ -138,9 +143,27 @@ def environment(downloads):
     }
 
 
+def command(command_id, name, status):
+    """A command as /api/v3/command answers it."""
+    return {"id": command_id, "name": name, "commandName": name,
+            "status": status, "priority": "normal", "trigger": "manual"}
+
+
+def created(command_id):
+    """The POST /api/v3/command route: 201, the command queued under the name sent."""
+    def answer(json=None, **_):
+        return reply(201, command(command_id, json["name"], "queued"))
+    return answer
+
+
+def refresh_status(base, status):
+    """What GET /api/v3/command/{id} answers for the queue refresh."""
+    return reply(200, command(REFRESH_ID[base], "RefreshMonitoredDownloads", status))
+
+
 def routes(radarr_queue=None, sonarr_queue=None):
     """Every route a run uses, answering as a healthy stack would."""
-    return {
+    table = {
         ("GET", f"{RADARR}/rootfolder"): reply(200, [RADARR_ROOT]),
         ("GET", f"{SONARR}/rootfolder"): reply(200, [SONARR_ROOT]),
         ("GET", f"{RADARR}/queue"): reply(200, queue_page(
@@ -151,25 +174,36 @@ def routes(radarr_queue=None, sonarr_queue=None):
         ("GET", f"{RADARR}/movie"): reply(200, []),
         ("GET", f"{SONARR}/series"): reply(200, []),
     }
+    for base in (RADARR, SONARR):
+        table[("POST", f"{base}/downloadclient/testall")] = reply(200, TESTALL_PASSED)
+        table[("GET", f"{base}/health")] = reply(200, [])
+        table[("POST", f"{base}/command")] = created(REFRESH_ID[base])
+        table[("GET", f"{base}/command/{REFRESH_ID[base]}")] = refresh_status(
+            base, "completed")
+    return table
 
 
 def import_routes():
     """The routes, with import-pending rows: one on disk, one vanished."""
     table = routes(radarr_queue=[DOWNLOADING, IMPORT_PENDING, IMPORT_VANISHED])
     table[("GET", f"{RADARR}/manualimport")] = reply(200, [])
-    table[("POST", f"{RADARR}/command")] = reply(
-        201, {"id": 4242, "name": "ManualImport", "status": "queued"})
     table[("DELETE", f"{RADARR}/queue/103")] = reply(200, {})
     table[("DELETE", f"{RADARR}/queue/104")] = reply(200, {})
     return table
 
 
-def run(table, downloads, patches=()):
-    """One reset-error run; returns (exit status, fake API, log lines)."""
+def run(table, downloads, patches=(), clock=None):
+    """One reset-error run; returns (exit status, fake API, log lines).
+
+    The queue refresh is polled on `clock`, a fresh FakeClock by default: no
+    case ever sleeps for real.
+    """
     api = FakeApi(table)
     CAPTURE.lines.clear()
     with contextlib.ExitStack() as stack:
         stack.enter_context(mock.patch("requests.request", new=api))
+        stack.enter_context(mock.patch("maintenance.queue_trust.time",
+                                       new=clock or FakeClock()))
         for target, error in patches:
             stack.enter_context(mock.patch(target, side_effect=error))
         try:
@@ -177,6 +211,12 @@ def run(table, downloads, patches=()):
         except Exception as error:  # a crash fails this case, not the whole file
             code = f"raised {error!r}"
     return code, api, list(CAPTURE.lines)
+
+
+def commands(api, base, name):
+    """The body of every command of that name POSTed to one instance."""
+    return [kwargs["json"] for kwargs in api.made("POST", f"{base}/command")
+            if kwargs["json"]["name"] == name]
 
 
 @contextlib.contextmanager

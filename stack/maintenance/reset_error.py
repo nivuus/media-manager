@@ -6,10 +6,13 @@ module is what the tests import.
 
 The run fails closed. Before any action it checks that the storage is
 evidently there (storage_guard.py), and changes nothing at all when it is
-not. The purge only happens when every queue was read in full, since the
-queues are what protects a download from it; any API or I/O failure is
-recorded, the run does what it still safely can, and the exit status is 1 so
-that systemd marks the unit failed.
+not. The queues are what protects a download from the purge, so the purge
+only happens when every queue was read in full, right after a refresh, and
+its download clients passed their test and were not blocked both before
+and after the read (queue_trust.py): a queue lists nothing for a client
+that is down, blocked or not yet refreshed. Any API or I/O failure is
+recorded, the run does what it still safely can, and the exit status is 1
+so that systemd marks the unit failed.
 """
 import logging
 import os
@@ -22,8 +25,9 @@ from maintenance.arr_api import (ApiError, Failures, load_environment,
 from maintenance.dead_metadata import remove_dead_entries
 from maintenance.downloads_purge import (download_present, names_under,
                                          protected_names, purge)
-from maintenance.queue_actions import fetch_queue, manual_import, remove_queue_item
+from maintenance.queue_actions import manual_import, remove_queue_item
 from maintenance.queue_policy import classify_item, item_age_hours
+from maintenance.queue_trust import read_queue
 from maintenance.storage_guard import storage_problems
 
 log = logging.getLogger(__name__)
@@ -174,23 +178,30 @@ def run(environ):
     # One read per queue: the same rows protect downloads from the purge and
     # are then processed, so both steps see the same queue.
     queues = []
+    distrusted = []
     for instance in instances:
         try:
-            queues.append((instance, fetch_queue(instance)))
+            records, doubt = read_queue(instance)
         except ApiError as error:
             failures.record(f'[{instance}] queue unreadable', error)
+            distrusted.append(f'queue of {instance} unreadable')
+            continue
+        queues.append((instance, records))
+        if doubt is not None:
+            failures.record(f'[{instance}] queue not trusted to protect the purge', doubt)
+            distrusted.append(f'queue of {instance} not trusted, {doubt}')
 
-    if len(queues) == len(instances):
+    if not distrusted:
         # Protect files still tied to an active download before purging by age.
         purge(downloads_dir,
               protected_names(record for _, records in queues for record in records),
               owner, failures)
     else:
-        # A queue we could not read may reference any file in Downloads: with
-        # Radarr unreachable for 7 days, purging anyway deleted a completed,
+        # A queue we could not read, or one its download clients did not
+        # demonstrably feed, may miss any file in Downloads: with Radarr
+        # unreachable for 7 days, purging anyway deleted a completed,
         # unimported 36.8 GB download (audit C2).
-        log.warning('Downloads purge skipped: a queue could not be read, '
-                    'so the downloads it references are unknown.')
+        log.warning('Downloads purge skipped: %s', '; '.join(distrusted))
 
     # What is still on disk decides which import-pending rows lost their files.
     # Listed after the purge, so it shows what the processing will face: a
@@ -202,7 +213,8 @@ def run(environ):
         failures.record(f'Downloads directory {downloads_dir} cannot be listed', error)
         names = None
 
-    # The queues that were read are still processed.
+    # The queues that were read are still processed, trusted or not: the rows
+    # present are real, only absence is unreliable.
     for instance, records in queues:
         process_queue(instance, records, names, now, failures)
     remove_dead_entries(instances, failures)

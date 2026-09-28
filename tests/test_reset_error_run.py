@@ -25,8 +25,8 @@ import requests  # noqa: E402
 from maintenance_fakes import reply  # noqa: E402
 from reset_error_fixtures import (  # noqa: E402
     CANDIDATES, DOWNLOADING, IMPORT_PENDING, IMPORT_VANISHED, MOVIE, PENDING,
-    RADARR, SONARR, UNREFERENCED, case, import_routes, make_downloads,
-    queue_page, routes, run)
+    RADARR, SONARR, UNREFERENCED, case, commands, import_routes,
+    make_downloads, queue_page, routes, run)
 
 failures = []
 
@@ -186,11 +186,10 @@ with tempfile.TemporaryDirectory() as tmp, case("files gone", failures):
     # The download still on disk goes through the manual import instead.
     check("download present: manual import looked up",
           lookups, [IMPORT_PENDING["downloadId"]])
-    commands = api.made("POST", f"{RADARR}/command")
-    check("download present: import command sent", len(commands), 1)
-    if commands:
-        sent = commands[0]["json"]
-        check("download present: command", sent["name"], "ManualImport")
+    imports = commands(api, RADARR, "ManualImport")
+    check("download present: import command sent", len(imports), 1)
+    if imports:
+        sent = imports[0]
         check("download present: file imported as its movie",
               [(f["path"], f["movieId"]) for f in sent["files"]],
               [(f"/data/Downloads/radarr/{PENDING}/movie.mkv", 813)])
