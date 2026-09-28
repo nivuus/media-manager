@@ -208,40 +208,25 @@ def sync_failure_dropins(root):
             os.remove(dropin)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", required=True)
-    parser.add_argument("--root", default="/")
-    args = parser.parse_args()
-
-    ctx = json.load(sys.stdin)
-    answers = ctx.get("answers") or {}
-    root = args.root.rstrip("/") or "/"
-
+def install(root, answers):
+    """Deploy the stack under root, render its .env and place the units."""
     # Valider AVANT de deposer le premier octet : un appelant et le package en
     # desaccord sur le contrat est une erreur, pas quelque chose a contourner
     # au milieu d'une copie. A failing git-tracked-files lookup (rule 4) must
     # fail just as loudly, and just as early: falling back to a raw copy is
-    # exactly what would ship an untracked .env or config.xml. OSError covers
-    # the git binary itself being missing and any copy failure (permissions,
-    # disk full, ...): a bare crash is not "loud", it is a traceback instead
-    # of the same clean, named error every other failure here gets.
-    try:
-        nvenc = bool_answer(answers, "nvenc_node")
-        usenet = bool_answer(answers, "usenet")
-        media_root = text_answer(answers, "media_root", "/media/data").rstrip("/")
-        transcode = text_answer(answers, "transcode_dir",
-                                "/media/backup/.transcode")
-        timezone = text_answer(answers, "timezone", "Europe/Paris")
-        plex_claim = text_answer(answers, "plex_claim")
+    # exactly what would ship an untracked .env or config.xml.
+    nvenc = bool_answer(answers, "nvenc_node")
+    usenet = bool_answer(answers, "usenet")
+    media_root = text_answer(answers, "media_root", "/media/data").rstrip("/")
+    transcode = text_answer(answers, "transcode_dir",
+                            "/media/backup/.transcode")
+    timezone = text_answer(answers, "timezone", "Europe/Paris")
+    plex_claim = text_answer(answers, "plex_claim")
 
-        dest = os.path.join(root, DEST_REL)
+    dest = os.path.join(root, DEST_REL)
 
-        emit({"event": "progress", "pct": 20, "msg": "Depose de la pile"})
-        copy_stack(HERE, STACK, dest)
-    except (ValueError, RuntimeError, OSError) as exc:
-        print(f"media-manager install: {exc}", file=sys.stderr)
-        return 1
+    emit({"event": "progress", "pct": 20, "msg": "Depose de la pile"})
+    copy_stack(HERE, STACK, dest)
 
     # Le gabarit a fait son travail ; le laisser a cote du .env rendu ne
     # laisserait pas savoir lequel fait foi.
@@ -299,6 +284,28 @@ def main():
     sync_failure_dropins(root)
 
     emit({"event": "done"})
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--phase", required=True)
+    parser.add_argument("--root", default="/")
+    args = parser.parse_args()
+
+    ctx = json.load(sys.stdin)
+    answers = ctx.get("answers") or {}
+    root = args.root.rstrip("/") or "/"
+
+    # Every failure, before or after the copy, ends here with one clean,
+    # named error and exit 1. OSError covers the git binary itself being
+    # missing and any write failure (permissions, disk full, a file where
+    # a directory belongs, ...) in the copy, the .env, the units or their
+    # drop-ins: a bare crash is not "loud", it is a traceback instead.
+    try:
+        install(root, answers)
+    except (ValueError, RuntimeError, OSError) as exc:
+        print(f"media-manager install: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

@@ -355,6 +355,23 @@ with tempfile.TemporaryDirectory() as root:
           crlf.exists(), True)
     check("CRLF dropin: bytes unchanged", crlf.read_bytes(), crlf_content)
 
+# --- A failure after the copy gets the same clean, named error ------------
+# write_env, place_unit and sync_failure_dropins run after copy_stack; an
+# OSError there must not escape as a traceback. A regular file where the
+# unit directory belongs makes place_unit's makedirs fail.
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    blocker = pathlib.Path(root) / "etc" / "systemd"
+    blocker.parent.mkdir(parents=True, exist_ok=True)
+    blocker.write_text("not a directory\n")
+
+    proc = run(root, ANSWERS)
+    check("unit dir blocked: exit status", proc.returncode, 1)
+    check("unit dir blocked: named error",
+          proc.stderr.startswith("media-manager install: "), True)
+    check("unit dir blocked: no traceback",
+          "Traceback" in proc.stderr, False)
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)
