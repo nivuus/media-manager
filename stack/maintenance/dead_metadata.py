@@ -6,61 +6,48 @@ deciding what to do with orphaned media stays a human call.
 """
 import logging
 
-import requests
-
-from maintenance.arr_api import call
+from maintenance.arr_api import ApiError, call, get_json
 
 log = logging.getLogger(__name__)
 
 
-def remove_dead_entries(instances):
+def remove_dead_entries(instances, failures):
     """Remove the file-less entries whose upstream metadata is gone."""
     for instance in instances:
         if instance.kind == 'radarr':
-            _remove_dead_movies(instance)
+            _remove_dead(
+                instance, failures, 'movie', 'TMDb',
+                describe=lambda movie: f"{movie.get('title')} (tmdb {movie.get('tmdbId')})",
+                has_files=lambda movie: bool(movie.get('hasFile')),
+                delete_params={'deleteFiles': False, 'addImportExclusion': False})
         else:
-            _remove_dead_series(instance)
+            _remove_dead(
+                instance, failures, 'series', 'TheTVDB',
+                describe=lambda series: f"{series.get('title')} (tvdb {series.get('tvdbId')})",
+                has_files=lambda series: (series.get('statistics') or {}).get('sizeOnDisk', 0) > 0,
+                delete_params={'deleteFiles': False})
 
 
-def _remove_dead_movies(instance):
+def _remove_dead(instance, failures, resource, upstream, describe, has_files,
+                 delete_params):
     try:
-        response = call(instance, 'GET', 'movie')
-    except requests.exceptions.RequestException as error:
-        log.error('[%s] cannot list the movies: %s', instance, error)
+        entries = get_json(instance, resource)
+        if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+            raise ApiError(f'the {resource} answer is not a list of entries')
+    except ApiError as error:
+        failures.record(f'[{instance}] cannot list the {resource} entries', error)
         return
-    for movie in response.json():
-        if movie.get('status') != 'deleted':
+    for entry in entries:
+        if entry.get('status') != 'deleted':
             continue
-        desc = f"{movie.get('title')} (tmdb {movie.get('tmdbId')})"
-        if movie.get('hasFile'):
-            log.info('[%s] metadata deleted from TMDb but the file is present, kept: %s',
-                     instance, desc)
+        desc = describe(entry)
+        if has_files(entry):
+            log.info('[%s] metadata deleted from %s but files are present, kept: %s',
+                     instance, upstream, desc)
             continue
         try:
-            call(instance, 'DELETE', f"movie/{movie['id']}",
-                 params={'deleteFiles': False, 'addImportExclusion': False})
-            log.info('[%s] removed entry deleted from TMDb: %s', instance, desc)
-        except requests.exceptions.RequestException as error:
-            log.error('[%s] cannot remove %s: %s', instance, desc, error)
-
-
-def _remove_dead_series(instance):
-    try:
-        response = call(instance, 'GET', 'series')
-    except requests.exceptions.RequestException as error:
-        log.error('[%s] cannot list the series: %s', instance, error)
-        return
-    for series in response.json():
-        if series.get('status') != 'deleted':
+            call(instance, 'DELETE', f"{resource}/{entry['id']}", params=delete_params)
+        except ApiError as error:
+            failures.record(f'[{instance}] cannot remove {desc}', error)
             continue
-        desc = f"{series.get('title')} (tvdb {series.get('tvdbId')})"
-        if series.get('statistics', {}).get('sizeOnDisk', 0) > 0:
-            log.info('[%s] metadata deleted from TheTVDB but files are present, kept: %s',
-                     instance, desc)
-            continue
-        try:
-            call(instance, 'DELETE', f"series/{series['id']}",
-                 params={'deleteFiles': False})
-            log.info('[%s] removed entry deleted from TheTVDB: %s', instance, desc)
-        except requests.exceptions.RequestException as error:
-            log.error('[%s] cannot remove %s: %s', instance, desc, error)
+        log.info('[%s] removed an entry deleted from %s: %s', instance, upstream, desc)

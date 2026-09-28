@@ -3,11 +3,19 @@
 Configuration comes from the environment. Under systemd the unit loads the
 deployment's .env through EnvironmentFile=; a manual run finds the same file
 through python-dotenv.
+
+Every API failure surfaces as ApiError, and each step reports it to a
+Failures recorder instead of swallowing it: the run carries on with what it
+can still do safely, then exits non-zero so that systemd marks the unit
+failed and OnFailure= can alert.
 """
+import logging
 from dataclasses import dataclass
 
 import requests
 from dotenv import load_dotenv
+
+log = logging.getLogger(__name__)
 
 # (connect, read) in seconds. Without a timeout requests waits forever, and a
 # single hung call would hold the unit until systemd kills it.
@@ -61,12 +69,42 @@ def missing_api_keys(instances):
             if not instance.api_key]
 
 
+class ApiError(Exception):
+    """An API call that did not produce a usable answer."""
+
+
 def call(instance, method, path, *, params=None, payload=None,
          timeout=DEFAULT_TIMEOUT):
-    """One API v3 call. Raises requests' exceptions, non-2xx statuses included."""
-    response = requests.request(
-        method, f'{instance.url}/api/v3/{path}',
-        headers={'X-Api-Key': instance.api_key},
-        params=params, json=payload, timeout=timeout)
-    response.raise_for_status()
+    """One API v3 call, returning the response.
+
+    Raises ApiError on a network error, a timeout or a non-2xx status.
+    """
+    try:
+        response = requests.request(
+            method, f'{instance.url}/api/v3/{path}',
+            headers={'X-Api-Key': instance.api_key},
+            params=params, json=payload, timeout=timeout)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as error:
+        raise ApiError(f'{method} /api/v3/{path}: {error}') from error
     return response
+
+
+def get_json(instance, path, *, params=None, timeout=DEFAULT_TIMEOUT):
+    """GET a resource and return its decoded body; ApiError if it is not JSON."""
+    response = call(instance, 'GET', path, params=params, timeout=timeout)
+    try:
+        return response.json()
+    except ValueError as error:  # requests' JSONDecodeError is a ValueError
+        raise ApiError(f'GET /api/v3/{path}: the answer is not JSON ({error})') from error
+
+
+class Failures:
+    """The failures of one run: logged as they happen, counted for the exit status."""
+
+    def __init__(self):
+        self.count = 0
+
+    def record(self, context, error):
+        self.count += 1
+        log.error('%s: %s', context, error)

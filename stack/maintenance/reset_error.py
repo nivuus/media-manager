@@ -3,16 +3,20 @@
 Run by media-manager-reset-error.service through stack/reset-error.py, which
 only calls main(): a file name with a hyphen cannot be imported, and this
 module is what the tests import.
+
+The run fails closed. The purge only happens when every queue was read in
+full, since the queues are what protects a download from it; any API or I/O
+failure is recorded, the run does what it still safely can, and the exit
+status is 1 so that systemd marks the unit failed.
 """
 import logging
 import os
 from datetime import datetime, timezone
 
-import requests
-
 from maintenance import run_log
-from maintenance.arr_api import (load_environment, missing_api_keys,
-                                 radarr_instances, sonarr_instances)
+from maintenance.arr_api import (ApiError, Failures, load_environment,
+                                 missing_api_keys, radarr_instances,
+                                 sonarr_instances)
 from maintenance.dead_metadata import remove_dead_entries
 from maintenance.downloads_purge import protected_names, purge
 from maintenance.queue_actions import fetch_queue, manual_import, remove_queue_item
@@ -43,7 +47,7 @@ def describe(item):
     return desc
 
 
-def process_queue(instance, records, now):
+def process_queue(instance, records, now, failures):
     """Classify and act on every row of one instance's queue."""
     removed = 0
     recoverable = 0
@@ -70,7 +74,14 @@ def process_queue(instance, records, now):
             continue
 
         if action == 'try_import':
-            if manual_import(instance, item):
+            try:
+                queued = manual_import(instance, item)
+            except ApiError as error:
+                # Says nothing about the download itself: keep the row for a
+                # run that can actually ask.
+                failures.record(f'[{instance}] manual import of {desc}', error)
+                continue
+            if queued:
                 imported += 1
                 log.info('[%s] manual import triggered: %s', instance, desc)
                 if download_id:
@@ -91,11 +102,12 @@ def process_queue(instance, records, now):
         log.info('[%s] removing%s: %s', instance, ' + blocklist' if blocklist else '', desc)
         try:
             remove_queue_item(instance, item['id'], blocklist=blocklist)
-            removed += 1
-            if download_id:
-                handled_download_ids.add(download_id)
-        except requests.exceptions.RequestException as error:
-            log.error('[%s] cannot remove queue row %s: %s', instance, item['id'], error)
+        except ApiError as error:
+            failures.record(f'[{instance}] cannot remove queue row {item["id"]}', error)
+            continue
+        removed += 1
+        if download_id:
+            handled_download_ids.add(download_id)
 
     summary = f'[{instance}] {removed}/{len(records)} queue rows removed'
     details = []
@@ -119,18 +131,40 @@ def run(environ):
                   '.env file or as environment variables.', ', '.join(missing))
         return 1
 
+    failures = Failures()
     now = datetime.now(timezone.utc)
     downloads_dir = environ.get('DOWNLOADS_DIR', DEFAULT_DOWNLOADS_DIR)
     owner = (int(environ.get('PUID', 1000)), int(environ.get('PGID', 1000)))
 
-    # Protect files still tied to an active download before purging by age.
-    purge(downloads_dir,
-          protected_names(record for instance in instances
-                          for record in fetch_queue(instance)),
-          owner)
+    # One read per queue: the same rows protect downloads from the purge and
+    # are then processed, so both steps see the same queue.
+    queues = []
     for instance in instances:
-        process_queue(instance, fetch_queue(instance), now)
-    remove_dead_entries(instances)
+        try:
+            queues.append((instance, fetch_queue(instance)))
+        except ApiError as error:
+            failures.record(f'[{instance}] queue unreadable', error)
+
+    if len(queues) == len(instances):
+        # Protect files still tied to an active download before purging by age.
+        purge(downloads_dir,
+              protected_names(record for _, records in queues for record in records),
+              owner, failures)
+    else:
+        # A queue we could not read may reference any file in Downloads: with
+        # Radarr unreachable for 7 days, purging anyway deleted a completed,
+        # unimported 36.8 GB download (audit C2).
+        log.warning('Downloads purge skipped: a queue could not be read, '
+                    'so the downloads it references are unknown.')
+
+    # The queues that were read are still processed.
+    for instance, records in queues:
+        process_queue(instance, records, now, failures)
+    remove_dead_entries(instances, failures)
+
+    if failures.count:
+        log.error('Run finished with %d failure(s).', failures.count)
+        return 1
     return 0
 
 

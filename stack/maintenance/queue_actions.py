@@ -1,15 +1,10 @@
 """Reading a Radarr/Sonarr download queue, and acting on its rows.
 
 The actions are the manual import of a finished download and the removal of
-a queue row, with or without blocklisting its release.
+a queue row, with or without blocklisting its release. Every API failure
+raises ApiError: the caller records it.
 """
-import logging
-
-import requests
-
-from maintenance.arr_api import call
-
-log = logging.getLogger(__name__)
+from maintenance.arr_api import ApiError, call, get_json
 
 # The manual-import lookup makes Radarr/Sonarr scan the download and ffprobe
 # every file in it: allow it longer than an ordinary call.
@@ -25,7 +20,11 @@ UNIMPORTABLE_REJECTIONS = [
 
 
 def fetch_queue(instance):
-    """Fetch all queue records from a Radarr/Sonarr instance.
+    """Every row of a Radarr/Sonarr download queue.
+
+    Raises ApiError when the queue cannot be read in full. The rows feed the
+    set of downloads the purge must not touch, so a partial answer is not a
+    smaller queue: it is an unknown one.
 
     'Unknown' items — downloads Radarr/Sonarr could not attach to a movie or a
     series, which show up in the UI under their raw torrent hash — are excluded
@@ -37,24 +36,24 @@ def fetch_queue(instance):
         params['includeUnknownMovieItems'] = True
     else:
         params['includeUnknownSeriesItems'] = True
-    try:
-        queue = call(instance, 'GET', 'queue', params=params).json()
-
-        records = queue.get('records', [])
-        if not isinstance(records, list):
-            log.error("[%s] the queue's 'records' is not a list: %s", instance, queue)
-            return []
-        return records
-    except requests.exceptions.RequestException as error:
-        log.error('[%s] cannot read the queue: %s', instance, error)
-        return []
+    queue = get_json(instance, 'queue', params=params)
+    records = queue.get('records') if isinstance(queue, dict) else None
+    if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
+        raise ApiError("the queue answer has no 'records' list of rows")
+    total = queue.get('totalRecords')
+    if not isinstance(total, int):
+        raise ApiError("the queue answer has no 'totalRecords' count")
+    if total > len(records):
+        raise ApiError(f'only {len(records)} of the {total} queue rows were returned')
+    return records
 
 
 def remove_queue_item(instance, item_id, blocklist=False):
-    """Delete a single queue item.
+    """Delete a single queue item, removing its download from the client.
 
     blocklist=True tells Radarr/Sonarr to blocklist the release so it grabs a
     different one next time instead of re-grabbing the same broken release.
+    Raises ApiError when the row could not be removed.
     """
     call(instance, 'DELETE', f'queue/{item_id}',
          params={'removeFromClient': True, 'blocklist': blocklist})
@@ -107,37 +106,32 @@ def build_import_file(candidate, kind):
 
 
 def manual_import(instance, item):
-    """Import a finished-but-unimported download. Returns True if queued.
+    """Import a finished-but-unimported download.
 
     This is the automated equivalent of the "Manual Import" button: it asks the
     API which files the download holds and how they were matched, then imports
     the ones that are unambiguously identified.
+
+    Returns True when a ManualImport command was queued, False when the
+    download holds nothing that can be imported unambiguously. Raises ApiError
+    when the API could not be asked, which says nothing about the download.
     """
     download_id = item.get('downloadId')
     if not download_id:
         return False
 
-    try:
-        candidates = call(
-            instance, 'GET', 'manualimport',
-            params={'downloadId': download_id, 'filterExistingFiles': True},
-            timeout=MANUAL_IMPORT_TIMEOUT,
-        ).json()
-    except (requests.exceptions.RequestException, ValueError) as error:
-        log.error('[%s] cannot list the manual-import candidates of %s: %s',
-                  instance, download_id, error)
-        return False
+    candidates = get_json(
+        instance, 'manualimport',
+        params={'downloadId': download_id, 'filterExistingFiles': True},
+        timeout=MANUAL_IMPORT_TIMEOUT)
+    if not isinstance(candidates, list) or not all(isinstance(c, dict) for c in candidates):
+        raise ApiError('the manual-import answer is not a list of candidates')
 
     files = [f for f in (build_import_file(c, instance.kind) for c in candidates) if f]
     if not files:
         return False
 
-    try:
-        call(instance, 'POST', 'command',
-             payload={'name': 'ManualImport', 'importMode': 'auto', 'files': files},
-             timeout=MANUAL_IMPORT_TIMEOUT)
-    except requests.exceptions.RequestException as error:
-        log.error('[%s] manual import refused for %s: %s', instance, download_id, error)
-        return False
-
+    call(instance, 'POST', 'command',
+         payload={'name': 'ManualImport', 'importMode': 'auto', 'files': files},
+         timeout=MANUAL_IMPORT_TIMEOUT)
     return True
