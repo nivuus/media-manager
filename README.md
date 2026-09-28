@@ -68,9 +68,11 @@ existing values and comments are left alone.
 | `systemd/` | The three service/timer pairs that replace the crontab |
 | `tests/` | 18 standalone suites, run by `make test` |
 
-`stack/` being the deployment directory verbatim is what makes the `install`
-hook a plain recursive copy: there is no file list to keep in sync, so there is
-no file anyone can forget to add alongside a new service.
+`stack/` being the deployment directory verbatim is what spares the `install`
+hook a file list: from a git checkout it copies only the files git tracks
+under `stack/` (the whole tree from a `git archive` export), never a `.env`,
+and it fails rather than copy a symlink — so there is no list anyone can
+forget to update alongside a new service, only files to commit.
 
 ## Configuration
 

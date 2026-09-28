@@ -13,7 +13,10 @@ Quatre conséquences qui priment sur tout le reste de ce fichier :
 
 - **`stack/` EST le répertoire de déploiement**, à l'octet près. Ajouter un
   service au compose sans mettre son asset sous `stack/` le rend absent de la
-  cible. Le hook `install` copie le sous-arbre entier, il n'a pas de liste.
+  cible. Le hook `install` n'a pas de liste : depuis un checkout il ne copie
+  que les fichiers suivis par git sous `stack/` (tout le sous-arbre depuis un
+  export `git archive`), jamais un `.env`, et échoue plutôt que de copier un
+  lien symbolique.
 - **Seuls les fichiers commités voyagent** : `build.sh` exporte par
   `git archive HEAD`. Un fichier laissé non commité n'existe pas pour l'ISO.
 - **`tier: userspace`** : déclarer `kernel-cmdline`, `modules` ou
