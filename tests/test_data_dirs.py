@@ -124,6 +124,11 @@ with tempfile.TemporaryDirectory() as root:
     fake_group_file(root)
     proc = run_hook(root)
     path = pathlib.Path(root) / DEST_REL / "maintainerr"
+    # The success path (exit 0, dir owned 1000:1000) can only run as root, or
+    # as uid/gid 1000 itself: an unprivileged chown to another owner is
+    # refused. Any other user only covers the named-error branch below; the
+    # ownership logic itself is covered for every user by the spy-based
+    # in-process tests further down.
     if IS_ROOT or (os.getuid(), os.getgid()) == (1000, 1000):
         check("hook: exit status", proc.returncode, 0)
         check("hook: dir created", path.is_dir(), True)
@@ -147,6 +152,68 @@ with tempfile.TemporaryDirectory() as root, \
     check("hook symlink: named error",
           proc.stderr.startswith("media-manager install: "), True)
     check("hook symlink: no traceback", "Traceback" in proc.stderr, False)
+
+# --- The owner comes from the EFFECTIVE .env, not from the defaults -------
+# compose runs the container as ${PUID}:${PGID} read from the .env, and a
+# reinstall keeps the existing values (merge_env), so the data dir must follow.
+import install  # noqa: E402
+
+for text, want in (("PUID=1234\nPGID=4321\n", (1234, 4321)),
+                   ("A=1\nPUID=7\nPGID=8\nPUID=9\n", (9, 8)),
+                   ('PUID="1234"\nPGID=\'55\'\n', (1234, 55))):
+    check(f"env identity {text!r}", install.env_identity(text), want)
+for text in ("PGID=1000\n", "PUID=1000\n", "PUID=abc\nPGID=1\n",
+             "PUID=\nPGID=1\n", "PUID=-1\nPGID=1\n", "PUID=1_0\nPGID=1\n"):
+    try:
+        install.env_identity(text)
+        check(f"env identity refused {text!r}", "no error", "ValueError")
+    except ValueError as exc:
+        check(f"env identity error names the key {text!r}",
+              "PUID" in str(exc) or "PGID" in str(exc), True)
+
+
+def install_with_env(env_text):
+    """Run install() in-process on a scratch root, spying on the data dirs."""
+    with tempfile.TemporaryDirectory() as root:
+        fake_group_file(root)
+        dest = pathlib.Path(root) / DEST_REL
+        dest.mkdir(parents=True)
+        (dest / ".env").write_text(env_text)
+        with mock.patch.object(install, "ensure_data_dirs") as spy, \
+                mock.patch.object(install, "emit"):
+            try:
+                install.install(root, dict(ANSWERS))
+            except (ValueError, RuntimeError, OSError) as exc:
+                return spy, exc
+        return spy, None
+
+
+spy, err = install_with_env("PUID=1234\nPGID=1235\nTZ=UTC\n")
+check("existing .env: no error", err, None)
+check("existing .env: dirs owned by its PUID/PGID",
+      [c.args[1:] for c in spy.call_args_list], [(1234, 1235)])
+
+spy, err = install_with_env("PUID=nope\nPGID=1000\n")
+check("bad PUID: error", isinstance(err, ValueError), True)
+check("bad PUID: no dir touched", spy.call_count, 0)
+
+spy, err = install_with_env("")
+check("fresh install: rendered defaults", err, None)
+check("fresh install: defaults used",
+      [c.args[1:] for c in spy.call_args_list],
+      [(install.PUID, install.PGID)])
+
+if IS_ROOT:
+    with tempfile.TemporaryDirectory() as root:
+        fake_group_file(root)
+        dest = pathlib.Path(root) / DEST_REL
+        dest.mkdir(parents=True)
+        (dest / ".env").write_text("PUID=1234\nPGID=1234\n")
+        proc = run_hook(root)
+        check("hook, existing .env: exit status", proc.returncode, 0)
+        st = (dest / "maintainerr").stat()
+        check("hook, existing .env: real owner 1234",
+              (st.st_uid, st.st_gid), (1234, 1234))
 
 if failures:
     print("\n".join(failures))
