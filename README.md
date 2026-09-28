@@ -1,12 +1,13 @@
 # media-manager
 
 A Docker-based media automation platform for movies and TV shows — from a user
-request to a file in the Plex library, with AllDebrid downloads, AI-generated
-subtitles and hardware transcoding.
+request to a file in the Plex library, with AllDebrid downloads, subtitles
+from Bazarr's providers and hardware transcoding.
 
 It is packaged as a **Nivuus package** (`nivuus.dev/v1`): the
 [installer](https://github.com/nivuus/installer) embeds it in its ISO and
-deploys it in two phases, with no manual step.
+deploys it in two automated phases. A handful of steps still need a human
+afterwards — see "Configuration" and "Maintenance" below.
 
 ## Data flow
 
@@ -21,7 +22,7 @@ Organize (Radarr :7878 · Sonarr :8989)
     ↓
 Transcode (Tdarr :8265-8266, optional)
     ↓
-Subtitles (Bazarr :6767 → providers + Whisper ASR :9000)
+Subtitles (Bazarr :6767 → providers)
     ↓
 Library (Plex, monitored by Tautulli :8181)
 ```
@@ -39,7 +40,7 @@ left uncommitted does not exist as far as the installer is concerned.
 | Phase | When | What it does |
 |---|---|---|
 | `install` | On the target filesystem | Copies `stack/` to `/opt/nivuus/media-manager`, renders `.env`, places the six maintenance units |
-| `activate` | After the reboot, network up | `docker compose up -d`, harvests the Radarr/Sonarr/Prowlarr API keys, arms the three timers |
+| `activate` | After the reboot, network up | Starts every service that has no container yet (never a blanket `up -d`), harvests the Radarr/Sonarr/Prowlarr API keys, arms the `reset-error` and `update-wanted` timers (`cleanup` ships but stays unarmed — see "Maintenance") |
 
 There is no `resolve` phase: the package is `tier: userspace` — it declares no
 kernel parameter, no module and no hugepage, so there is nothing to resolve.
@@ -61,15 +62,17 @@ existing values and comments are left alone.
 | Path | What it is |
 |---|---|
 | `nivuus-package.yaml` | The manifest. `tier: userspace`, no `claims`, no `requires` |
-| `wizard.yaml` | The eight questions the portal asks |
+| `wizard.yaml` | The six questions the portal asks |
 | `hooks/` | `install.py` and `activate.py` — stdlib only, they run on a minimal Debian |
-| `stack/` | **The deployment directory, byte for byte.** Compose files, the three maintenance scripts, the Tdarr assets |
+| `stack/` | **The deployment directory, byte for byte.** Compose files, the three maintenance scripts (two are thin wrappers around `stack/maintenance/`), the Tdarr assets |
 | `systemd/` | The three service/timer pairs that replace the crontab |
-| `tests/` | Five standalone suites, run by `make test` |
+| `tests/` | 18 standalone suites, run by `make test` |
 
-`stack/` being the deployment directory verbatim is what makes the `install`
-hook a plain recursive copy: there is no file list to keep in sync, so there is
-no file anyone can forget to add alongside a new service.
+`stack/` being the deployment directory verbatim is what spares the `install`
+hook a file list: from a git checkout it copies only the files git tracks
+under `stack/` (the whole tree from a `git archive` export), never a `.env`,
+and it fails rather than copy a symlink — so there is no list anyone can
+forget to update alongside a new service, only files to commit.
 
 ## Configuration
 
@@ -82,7 +85,8 @@ no file anyone can forget to add alongside a new service.
 | `DOWNLOADS_DIR` · `MOVIES_DIR` · `TV_DIR` | **derived** from `MEDIA_ROOT` | `/media/data/Downloads` |
 | `TRANSCODE_DIR` | wizard | `/media/backup/.transcode` |
 | `COMPOSE_FILE` | `/dev/dri` present or not | `docker-compose.yml:docker-compose.qsv.yml` |
-| `COMPOSE_PROFILES` | wizard (`nvenc_node`) | `nvenc` |
+| `COMPOSE_PROFILES` | wizard (`nvenc_node`, `usenet`) | `nvenc` |
+| `PLEX_CLAIM` | wizard (`plex_claim`, optional) | — |
 | `VIDEO_GID` · `RENDER_GID` | target's `/etc/group` | `44` · `105` |
 | `RADARR_API_KEY` · `SONARR_API_KEY` · `PROWLARR_API_KEY` | harvested by `activate` | — |
 | `BAZARR_API_KEY` · `TAUTULLI_API_KEY` · `OVERSEERR_API_KEY` | **by hand**, Settings > General | — |
@@ -94,19 +98,27 @@ the space used twice until the 24h purge.
 
 ## Maintenance
 
-Three systemd timers, shipped by the package and armed by the `activate` hook:
+Three systemd timers are shipped by the package; `activate` arms two of them:
 
-| Unit | Time | What it does |
-|---|---|---|
-| `media-manager-reset-error.timer` | 06:00 | Clears failed downloads, imports the completed-but-unimported ones |
-| `media-manager-update-wanted.timer` | 07:00 | Searches a bounded, rotating slice of the missing backlog |
-| `media-manager-cleanup.timer` | 08:00 | Frees disk space, least-watched first, using Tautulli data |
+| Unit | Time | Armed by `activate` | What it does |
+|---|---|---|---|
+| `media-manager-reset-error.timer` | 06:00 | yes | Clears failed downloads, imports the completed-but-unimported ones |
+| `media-manager-update-wanted.timer` | 07:00 | yes | Searches a bounded, rotating slice of the missing backlog |
+| `media-manager-cleanup.timer` | 08:00 | no | Frees disk space, least-watched first, using Tautulli data |
 
-`media-manager-cleanup.timer` is armed **only once `TAUTULLI_API_KEY` is set**:
-`media_cleanup.py` exits 1 without it, so arming it on a fresh install would
-produce a failed unit every day at 08:00. That key is not harvestable — Tautulli
-does not write it to a `config.xml`. Fill it in `.env`, then re-run the
-`activate` hook (or link the timer by hand).
+`media-manager-cleanup.timer` is **deliberately left unarmed** — disabled on
+the reference host since 2026-09-28, pending a Maintainerr pilot to replace
+it. `media_cleanup.py` has known defects: it can overshoot its free-space
+threshold (its post-delete check re-reads real disk usage right away, before
+Radarr/Sonarr's own file deletion is necessarily reflected on disk); a
+re-requested title is ranked first for deletion again (Tautulli watch data is
+keyed by title/year and outlives the deletion, so a freshly re-downloaded
+title inherits its old watch date and looks stale immediately); its
+watch-history match is done on the raw title text, so a Plex library using
+localised titles never lines up with Radarr/Sonarr's own title; and it
+carries on with partial or empty data when Tautulli or an `*arr` instance is
+unreachable, instead of stopping. Run it by hand only, and always start with
+`--dry-run` (see below).
 
 ```bash
 systemctl list-timers 'media-manager-*'
@@ -138,6 +150,8 @@ python3 media_cleanup.py --threshold 15  # custom threshold (15% free)
 | **Tdarr** | 8265-8266 | Transcoding server |
 | **Tdarr-Node** | — | QSV transcoding worker |
 | **Tdarr-Node-NVENC** | — | NVIDIA worker, profile `nvenc` |
+| **Plex** | 32400 | Media server (host network) |
+| **Tautulli** | 8181 | Plex monitoring and statistics |
 
 ### Optional services
 
@@ -152,10 +166,6 @@ provider rejects the stored credentials on top of that. Turning it back on is
 therefore **not** a matter of flipping the profile alone; it needs a valid
 provider account, a Newznab indexer, and a download-client entry on both sides.
 Its configuration is kept in `./sabnzbd` so none of the rest has to be redone.
-
-| **Plex** | 32400 | Media server (host network) |
-| **Tautulli** | 8181 | Plex monitoring and statistics |
-| **Whisper ASR** | 9000 | AI subtitle generation |
 
 ### One instance per media type
 
@@ -212,14 +222,24 @@ docker compose config              # validate the merged compose files
   saturated by hung downloads; `docker compose restart rdtclient`.
 - **Transcoding errors** — check the node memory limits before the flow; see
   `CLAUDE.md`, "Tdarr resource limits".
-- **No hardware transcoding** — `grep COMPOSE_FILE .env`: if the QSV overlay is
-  missing, `/dev/dri` was absent when the `install` hook ran.
+- **No hardware transcoding** — check the running container, not the `.env`:
+  `docker inspect -f '{{json .HostConfig.Devices}}' <container>`. A missing
+  `/dev/dri` device means either `/dev/dri` was absent when `install` ran, or
+  compose was invoked with an explicit `-f docker-compose.yml` instead of
+  relying on `COMPOSE_FILE`, which silently drops the QSV overlay — see
+  `CLAUDE.md`, "Container Updates".
 
 ## Auto-updates
 
-Every service carries a [Watchtower](https://containrrr.dev/watchtower/) label
-for automatic image updates.
+Every service carries a `com.centurylinklabs.watchtower.enable: true` label,
+kept for the name only — the updater reading it is `mqtt-system-agent`
+(`packages/mqtt`, `src/features/updates/`), not Watchtower. Since its
+2026-09-28 fix, it replays each container's own compose files and recreates
+one service at a time with `--no-deps`, and never starts a container that is
+currently stopped — an older version could still recreate a container with a
+plain `up`, dropping the QSV overlay. See `CLAUDE.md`, "Container Updates",
+before running a global `docker compose up -d` or `restart` by hand.
 
 ## License
 
-MIT
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — see `LICENSE.md`.

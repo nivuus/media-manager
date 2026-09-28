@@ -58,8 +58,13 @@ check("aucun claim", manifest.get("claims") or {}, {})
 requires = manifest.get("requires") or {}
 check("aucune feature requise", requires.get("features") or [], [])
 check("aucune capability requise", requires.get("capabilities") or [], [])
-for package in ("docker.io", "docker-compose-v2", "python3-requests"):
-    check(f"apt declare {package}", package in (manifest.get("apt") or []), True)
+
+# Docker is deliberately NOT in this list: `docker-compose-v2` does not exist
+# as a Debian package name, and `docker.io` conflicts with docker-ce (apt
+# would remove Docker CE from the reference host to satisfy it). Docker is a
+# prerequisite that hooks/activate.py's ensure_docker() checks for instead.
+check("liste apt exacte", manifest.get("apt"),
+      ["python3-requests", "python3-dotenv"])
 
 # Les hooks declares existent vraiment : un hook manquant fait echouer
 # l'installation au moment ou il est lance, pas au moment ou il est declare.

@@ -27,12 +27,25 @@ TROIS REGLES PORTENT LE RESTE.
    {root}/dev/dri repondrait donc « absent » sur toute machine installee
    depuis l'ISO, y compris celles qui ont un iGPU. La machine qui execute
    l'installateur EST la machine cible : c'est son /dev/dri qui fait foi.
+
+4. A GIT CHECKOUT DEPLOYS ONLY WHAT GIT TRACKS. `git ls-files -z stack/`
+   picks the file list instead of a raw directory walk, so an untracked
+   stack/.env or a service's runtime config.xml sitting in the working tree
+   is never shipped. A `git archive` export (build.sh) has no .git and
+   already went through the commit filter at export time, so it is copied
+   as the whole tree, exactly as before. `.git` as a worktree's own pointer
+   FILE (not a directory) still counts as a checkout. The copy itself (and
+   its symlink hardening: no symlinked source, no writing through a
+   symlinked destination component) lives in safe_copy.py, next to it.
 """
 import argparse
 import json
 import os
 import shutil
 import sys
+
+from atomic_env import write_env
+from safe_copy import copy_stack
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STACK = os.path.join(HERE, "stack")
@@ -47,6 +60,16 @@ UNITS = [
     "media-manager-update-wanted.service", "media-manager-update-wanted.timer",
     "media-manager-cleanup.service", "media-manager-cleanup.timer",
 ]
+
+# systemd-failure-notify@.service belongs to the host, not to this package
+# (see CLAUDE.md): it is what actually sends an alert on a failed run, but
+# this package must never declare a hard dependency on a unit it does not
+# ship. A drop-in wires each maintenance service to it, ONLY when the host
+# has it — a reinstall must not resurrect a dangling OnFailure= after an
+# operator removes that host unit.
+FAILURE_NOTIFY_UNIT = "systemd-failure-notify@.service"
+FAILURE_DROPIN_NAME = "10-on-failure.conf"
+FAILURE_DROPIN_CONTENT = "[Unit]\nOnFailure=systemd-failure-notify@%n.service\n"
 
 # Valeurs Debian par defaut, utilisees seulement si /etc/group est illisible.
 DEFAULT_GIDS = {"video": 44, "render": 105}
@@ -137,35 +160,74 @@ def place_unit(name, dest_dir):
     os.chmod(dest, 0o644)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", required=True)
-    parser.add_argument("--root", default="/")
-    args = parser.parse_args()
+def _is_our_dropin(path):
+    """True only for the exact file this hook itself would have written.
 
-    ctx = json.load(sys.stdin)
-    answers = ctx.get("answers") or {}
-    root = args.root.rstrip("/") or "/"
+    Never a symlink (it could point anywhere, and removing it would not be
+    "removing our content" but removing whatever name an operator or another
+    tool chose to put there) and never a directory (os.path.isfile is False
+    for one, so this returns False instead of letting a later open() crash
+    the hook). Any other content at the path — an operator's drop-in for a
+    different notifier, most likely — is left alone: this is provenance, not
+    "the path is ours because we chose the name."
 
+    Read and compared as bytes, never as decoded text: a text-mode open()
+    uses universal newlines, which would silently turn a CRLF copy of our
+    content into a match (and get it deleted), and raises UnicodeDecodeError
+    — uncaught here, since sync_failure_dropins runs after this hook's own
+    try/except block — on the first non-UTF-8 byte in an unrelated file.
+    """
+    if os.path.islink(path) or not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "rb") as fh:
+            return fh.read() == FAILURE_DROPIN_CONTENT.encode()
+    except OSError:
+        return False
+
+
+def sync_failure_dropins(root):
+    """Write or drop the OnFailure= alert drop-in for each maintenance service.
+
+    Only the three .service units get one (cleanup included: an operator who
+    runs it by hand still wants the alert) — never the .timer units, which
+    never fail themselves. When the host has no systemd-failure-notify@, a
+    drop-in a previous install left behind is removed — but only when it is
+    still exactly that (see _is_our_dropin); nothing else at that path, and
+    nothing else in that directory, is ever touched.
+    """
+    unit_dir = os.path.join(root, UNIT_REL_DIR)
+    notify_present = os.path.isfile(os.path.join(unit_dir, FAILURE_NOTIFY_UNIT))
+    for unit in (u for u in UNITS if u.endswith(".service")):
+        dropin = os.path.join(unit_dir, f"{unit}.d", FAILURE_DROPIN_NAME)
+        if notify_present:
+            os.makedirs(os.path.dirname(dropin), exist_ok=True)
+            with open(dropin, "w") as fh:
+                fh.write(FAILURE_DROPIN_CONTENT)
+        elif _is_our_dropin(dropin):
+            os.remove(dropin)
+
+
+def install(root, answers):
+    """Deploy the stack under root, render its .env and place the units."""
     # Valider AVANT de deposer le premier octet : un appelant et le package en
     # desaccord sur le contrat est une erreur, pas quelque chose a contourner
-    # au milieu d'une copie.
-    try:
-        nvenc = bool_answer(answers, "nvenc_node")
-        usenet = bool_answer(answers, "usenet")
-        media_root = text_answer(answers, "media_root", "/media/data").rstrip("/")
-        transcode = text_answer(answers, "transcode_dir",
-                                "/media/backup/.transcode")
-        timezone = text_answer(answers, "timezone", "Europe/Paris")
-        plex_claim = text_answer(answers, "plex_claim")
-    except ValueError as exc:
-        print(f"media-manager install: {exc}", file=sys.stderr)
-        return 1
+    # au milieu d'une copie. A failing git-tracked-files lookup (rule 4) must
+    # fail just as loudly, and just as early: falling back to a raw copy is
+    # exactly what would ship an untracked .env or config.xml.
+    nvenc = bool_answer(answers, "nvenc_node")
+    usenet = bool_answer(answers, "usenet")
+    media_root = text_answer(answers, "media_root", "/media/data").rstrip("/")
+    transcode = text_answer(answers, "transcode_dir",
+                            "/media/backup/.transcode")
+    timezone = text_answer(answers, "timezone", "Europe/Paris")
+    plex_claim = text_answer(answers, "plex_claim")
 
     dest = os.path.join(root, DEST_REL)
 
     emit({"event": "progress", "pct": 20, "msg": "Depose de la pile"})
-    shutil.copytree(STACK, dest, symlinks=True, dirs_exist_ok=True)
+    copy_stack(HERE, STACK, dest)
+
     # Le gabarit a fait son travail ; le laisser a cote du .env rendu ne
     # laisserait pas savoir lequel fait foi.
     template_copy = os.path.join(dest, TEMPLATE_NAME)
@@ -210,17 +272,40 @@ def main():
             rendered = merge_env(fh.read(), rendered)
         emit({"event": "progress", "pct": 70,
               "msg": ".env existant conserve, variables manquantes ajoutees"})
-    with open(env_path, "w") as fh:
-        fh.write(rendered)
-    # 0600 : le jeton de rattachement Plex, et bientot les cles API.
-    os.chmod(env_path, 0o600)
+    # Atomic: the Plex claim token and, soon, the API keys live here. A
+    # reinstall with unchanged values must not even touch the file (same
+    # inode and mtime), and mode 0600 is guaranteed by write_env itself.
+    write_env(env_path, rendered)
 
     emit({"event": "progress", "pct": 85, "msg": "Unites de maintenance posees"})
     unit_dir = os.path.join(root, UNIT_REL_DIR)
     for unit in UNITS:
         place_unit(unit, unit_dir)
+    sync_failure_dropins(root)
 
     emit({"event": "done"})
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--phase", required=True)
+    parser.add_argument("--root", default="/")
+    args = parser.parse_args()
+
+    ctx = json.load(sys.stdin)
+    answers = ctx.get("answers") or {}
+    root = args.root.rstrip("/") or "/"
+
+    # Every failure, before or after the copy, ends here with one clean,
+    # named error and exit 1. OSError covers the git binary itself being
+    # missing and any write failure (permissions, disk full, a file where
+    # a directory belongs, ...) in the copy, the .env, the units or their
+    # drop-ins: a bare crash is not "loud", it is a traceback instead.
+    try:
+        install(root, answers)
+    except (ValueError, RuntimeError, OSError) as exc:
+        print(f"media-manager install: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

@@ -9,6 +9,7 @@ Type=oneshot
 WorkingDirectory=/opt/nivuus/media-manager
 EnvironmentFile=/opt/nivuus/media-manager/.env
 ExecStart=/usr/bin/python3 /opt/nivuus/media-manager/update_wanted.py
+LogsDirectory=media-manager
 Nice=10
 IOSchedulingClass=idle
 TimeoutStartSec=3600

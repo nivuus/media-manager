@@ -151,7 +151,6 @@ services:
       - prowlarr
       - sonarr
       - radarr
-      - openai-whisper-asr-webservice
     ports:
       - 6767:6767
     labels:
@@ -397,25 +396,6 @@ services:
       - ${MOVIES_DIR}:/media/data/Movies
       - ${TV_DIR}:/media/data/TV Shows
       - ${TRANSCODE_DIR}:/transcode
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-
-  openai-whisper-asr-webservice:
-    image: mccloud/subgen:latest
-    labels:
-      com.centurylinklabs.watchtower.enable: true
-    restart: unless-stopped
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - WHISPER_MODEL=base
-      - TRANSCRIBE_DEVICE=auto
-      - WEBHOOK_PORT=9000
-      - TZ=${TZ}
-    ports:
-      - 9000:9000
     logging:
       driver: json-file
       options:

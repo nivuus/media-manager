@@ -1,7 +1,7 @@
 # Surcouche d'acceleration materielle Intel (QSV).
 #
 # Fusionnee au fichier principal par COMPOSE_FILE, que le hook install n'ecrit
-# QUE si la machine expose /dev/dri. Sans cette separation, les quatre services
+# QUE si la machine expose /dev/dri. Sans cette separation, les trois services
 # ci-dessous echouent au demarrage sur une machine sans iGPU — un montage de
 # peripherique absent est une erreur, pas une degradation.
 #
@@ -24,9 +24,5 @@ services:
       - "${RENDER_GID}"
 
   plex:
-    devices:
-      - /dev/dri:/dev/dri
-
-  openai-whisper-asr-webservice:
     devices:
       - /dev/dri:/dev/dri
