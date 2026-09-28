@@ -13,7 +13,6 @@ deux fois dans ce projet.
 
 Run: python3 tests/test_install_hook.py
 """
-import importlib.util
 import json
 import os
 import pathlib
@@ -349,12 +348,13 @@ def make_stack_skeleton(pkg):
     (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
 
 
-def run_pkg(pkg, root):
+def run_pkg(pkg, root, env=None):
     """Run a fake package's own install.py against --root root."""
     return subprocess.run(
         [sys.executable, str(pkg / "hooks" / "install.py"),
          "--phase", "install", "--root", root],
-        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg))
+        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg),
+        env=env)
 
 
 def build_git_checkout(pkg):
@@ -463,6 +463,130 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     check("export .env: leaked content never arrives",
           "leaked-export" in (dest / ".env").read_text(), False)
 
+# --- A tracked file missing from the working tree fails cleanly and deploys
+# NOTHING (fix round 1, item 6) ---------------------------------------------
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    (pkg / "stack" / "zzz-marker.txt").write_text("marker\n")
+
+    def git(*args):
+        proc = subprocess.run(["git", *args], cwd=str(pkg),
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+
+    git("init", "-q")
+    git("add", "stack/env.template", "stack/docker-compose.yml",
+        "stack/zzz-marker.txt")
+    git("-c", "user.email=t@t.test", "-c", "user.name=t",
+        "commit", "-q", "-m", "tracked files")
+
+    # Deleted after the commit, and sorting AFTER the other two tracked
+    # files (git ls-files is lexicographic: d < e < z): without a pre-flight
+    # existence check, docker-compose.yml and env.template would already be
+    # copied by the time this one is found missing, leaving a PARTIAL
+    # deploy behind.
+    (pkg / "stack" / "zzz-marker.txt").unlink()
+    fake_group_file(root)
+
+    proc = run_pkg(pkg, root)
+    check("missing tracked file: exit status", proc.returncode, 1)
+    check("missing tracked file: clean message",
+          proc.stderr.startswith("media-manager install:"), True)
+    check("missing tracked file: file named",
+          "zzz-marker.txt" in proc.stderr, True)
+    check("missing tracked file: no traceback", "Traceback" in proc.stderr, False)
+    check("missing tracked file: nothing deployed at all",
+          (pathlib.Path(root) / DEST_REL).exists(), False)
+
+# --- A missing git binary maps to the same clean error path (item 6) ------
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    build_git_checkout(pkg)  # a real checkout, so install.py WILL try git
+    fake_group_file(root)
+
+    proc = run_pkg(pkg, root, env={"PATH": "/nonexistent"})
+    check("git binary missing: exit status", proc.returncode, 1)
+    check("git binary missing: clean message",
+          proc.stderr.startswith("media-manager install:"), True)
+    check("git binary missing: no traceback", "Traceback" in proc.stderr, False)
+    check("git binary missing: nothing deployed",
+          (pathlib.Path(root) / DEST_REL).exists(), False)
+
+
+def _git_commit_tracked(pkg, *tracked_paths):
+    """git init + add + commit exactly the given paths, inside pkg."""
+    def git(*args):
+        proc = subprocess.run(["git", *args], cwd=str(pkg),
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+
+    git("init", "-q")
+    git("add", *tracked_paths)
+    git("-c", "user.email=t@t.test", "-c", "user.name=t",
+        "commit", "-q", "-m", "tracked files")
+
+
+# --- Root writes never follow symlinks: a hijacked ancestor directory -----
+# (fix round 1, item 7). A container with a read-write bind mount under the
+# deploy tree (Tdarr's tdarr/server/Tdarr/Plugins/..., see
+# stack/docker-compose.yml) could plant a symlink ahead of a reinstall,
+# redirecting a root-run write anywhere else on the host.
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    (pkg / "stack" / "tdarr" / "server").mkdir(parents=True)
+    (pkg / "stack" / "tdarr" / "server" / "marker.txt").write_text(
+        "expected content\n")
+    _git_commit_tracked(pkg, "stack/env.template", "stack/docker-compose.yml",
+                        "stack/tdarr/server/marker.txt")
+
+    dest = pathlib.Path(root) / DEST_REL
+    (dest / "tdarr").mkdir(parents=True)
+    victim = pathlib.Path(root) / "victim"
+    victim.mkdir()
+    (dest / "tdarr" / "server").symlink_to(victim)
+    fake_group_file(root)
+
+    proc = run_pkg(pkg, root)
+    check("symlinked ancestor: exit status", proc.returncode, 1)
+    check("symlinked ancestor: clean message",
+          proc.stderr.startswith("media-manager install:"), True)
+    check("symlinked ancestor: no traceback", "Traceback" in proc.stderr, False)
+    check("symlinked ancestor: victim untouched",
+          sorted(p.name for p in victim.iterdir()), [])
+    check("symlinked ancestor: symlink itself untouched",
+          (dest / "tdarr" / "server").is_symlink(), True)
+
+# --- Root writes never follow symlinks: a hijacked destination file -------
+# The final path component is replaced (os.replace), never opened and
+# written through: the symlink's target must survive exactly as it was.
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    (pkg / "stack" / "tdarr" / "server").mkdir(parents=True)
+    (pkg / "stack" / "tdarr" / "server" / "marker.txt").write_text(
+        "expected content\n")
+    _git_commit_tracked(pkg, "stack/env.template", "stack/docker-compose.yml",
+                        "stack/tdarr/server/marker.txt")
+
+    dest = pathlib.Path(root) / DEST_REL
+    (dest / "tdarr" / "server").mkdir(parents=True)
+    victim = pathlib.Path(root) / "victim.txt"
+    victim.write_text("original victim content\n")
+    (dest / "tdarr" / "server" / "marker.txt").symlink_to(victim)
+    fake_group_file(root)
+
+    proc = run_pkg(pkg, root)
+    check("symlinked destination file: exit status", proc.returncode, 0)
+    check("symlinked destination file: replaced with a regular file",
+          (dest / "tdarr" / "server" / "marker.txt").is_symlink(), False)
+    check("symlinked destination file: tracked content written",
+          (dest / "tdarr" / "server" / "marker.txt").read_text(),
+          "expected content\n")
+    check("symlinked destination file: victim untouched",
+          victim.read_text(), "original victim content\n")
+
 # --- A failing git command fails the install loudly, never a fallback -----
 # Ruling 18: git 2.47 on the reference host refuses a repository it does not
 # own when run as root ("dubious ownership"). Whatever the reason, a
@@ -491,11 +615,11 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
 # run as root ("detected dubious ownership": the checkout is the operator's,
 # install runs as root), unless safe.directory names it explicitly. The real
 # git binary still runs here (a transparent spy, not a mock) — only the argv
-# it was called with is pinned.
+# it was called with is pinned. git_tracked_stack_files lives in safe_copy.py
+# (fix round 1, item 7), imported directly the same way hooks/install.py
+# itself does.
 sys.path.insert(0, str(REPO / "hooks"))
-_spec = importlib.util.spec_from_file_location("install_hook_argv", HOOK)
-install_hook_argv = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(install_hook_argv)
+import safe_copy  # noqa: E402
 
 _real_run = subprocess.run
 _git_calls = []
@@ -507,7 +631,7 @@ def _spy_run(argv, **kwargs):
 
 
 with mock.patch("subprocess.run", new=_spy_run):
-    install_hook_argv.git_tracked_stack_files(str(REPO))
+    safe_copy.git_tracked_stack_files(str(REPO))
 
 check("git argv pinned", _git_calls, [
     ["git", "-c", f"safe.directory={REPO}", "-C", str(REPO),

@@ -34,16 +34,18 @@ TROIS REGLES PORTENT LE RESTE.
    is never shipped. A `git archive` export (build.sh) has no .git and
    already went through the commit filter at export time, so it is copied
    as the whole tree, exactly as before. `.git` as a worktree's own pointer
-   FILE (not a directory) still counts as a checkout.
+   FILE (not a directory) still counts as a checkout. The copy itself (and
+   its symlink hardening: no symlinked source, no writing through a
+   symlinked destination component) lives in safe_copy.py, next to it.
 """
 import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 
 from atomic_env import write_env
+from safe_copy import copy_stack
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STACK = os.path.join(HERE, "stack")
@@ -78,59 +80,6 @@ RENDER_NODES = "/dev/dri"
 
 def emit(event):
     print(json.dumps(event), flush=True)
-
-
-def git_tracked_stack_files(pkg_dir):
-    """The paths `git ls-files` reports under stack/, or None outside a checkout.
-
-    A package directory with no .git — a file for a worktree, a directory
-    for a plain clone, see rule 4 above — is a `git archive` export: every
-    file it holds already went through the commit filter, so there is
-    nothing left to distrust. `safe.directory=` is required because the
-    install hook runs as root while the checkout is normally owned by the
-    operator: git 2.47 refuses a repository it does not own ("detected
-    dubious ownership") unless told to trust it explicitly. A non-zero exit
-    is raised, never swallowed into "copy everything" — that fallback is
-    exactly what would ship an untracked .env or a service's config.xml.
-    """
-    if not os.path.exists(os.path.join(pkg_dir, ".git")):
-        return None
-    proc = subprocess.run(
-        ["git", "-c", f"safe.directory={pkg_dir}", "-C", pkg_dir,
-         "ls-files", "-z", "stack/"],
-        capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"git ls-files -z stack/: {(proc.stderr or '').strip()}")
-    return [path for path in proc.stdout.split("\0") if path]
-
-
-def copy_stack(pkg_dir, stack_dir, dest):
-    """Deploy stack/ to dest: git-tracked files only in a checkout (rule 4),
-    the whole subtree otherwise. Never a .env, in either mode: a force-added
-    one in a checkout, or one simply sitting in an export's working tree,
-    must never overwrite the live .env — merge_env() has not even run yet
-    at this point.
-    """
-    tracked = git_tracked_stack_files(pkg_dir)
-    if tracked is None:
-        shutil.copytree(stack_dir, dest, symlinks=True, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns(".env"))
-        return
-    prefix = "stack/"
-    for relpath in tracked:
-        if not relpath.startswith(prefix):
-            continue  # ls-files was scoped to stack/; defensive only
-        relpath = relpath[len(prefix):]
-        if os.path.basename(relpath) == ".env":
-            continue
-        source = os.path.join(pkg_dir, prefix + relpath)
-        target = os.path.join(dest, relpath)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        if os.path.islink(source):
-            os.symlink(os.readlink(source), target)
-        else:
-            shutil.copy2(source, target)
 
 
 def group_gid(root, name):
@@ -267,7 +216,10 @@ def main():
     # desaccord sur le contrat est une erreur, pas quelque chose a contourner
     # au milieu d'une copie. A failing git-tracked-files lookup (rule 4) must
     # fail just as loudly, and just as early: falling back to a raw copy is
-    # exactly what would ship an untracked .env or config.xml.
+    # exactly what would ship an untracked .env or config.xml. OSError covers
+    # the git binary itself being missing and any copy failure (permissions,
+    # disk full, ...): a bare crash is not "loud", it is a traceback instead
+    # of the same clean, named error every other failure here gets.
     try:
         nvenc = bool_answer(answers, "nvenc_node")
         usenet = bool_answer(answers, "usenet")
@@ -281,7 +233,7 @@ def main():
 
         emit({"event": "progress", "pct": 20, "msg": "Depose de la pile"})
         copy_stack(HERE, STACK, dest)
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
         print(f"media-manager install: {exc}", file=sys.stderr)
         return 1
 
