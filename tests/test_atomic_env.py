@@ -15,6 +15,7 @@ import pathlib
 import stat
 import sys
 import tempfile
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "hooks"))
@@ -74,6 +75,66 @@ with tempfile.TemporaryDirectory() as tmp:
     write_env(str(path), "A=2\n")
     check("no stray temp files",
           sorted(p.name for p in pathlib.Path(tmp).iterdir()), [".env"])
+
+# --- Unchanged content still gets its mode fixed to 0600 --------------------
+# The early return for identical content used to skip the mode guarantee the
+# module's own docstring (and install.py/activate.py's comments) claims.
+with tempfile.TemporaryDirectory() as tmp:
+    path = pathlib.Path(tmp) / ".env"
+    path.write_text("A=1\nB=2\n")
+    os.chmod(path, 0o644)
+    before = path.stat()
+
+    write_env(str(path), "A=1\nB=2\n")
+    after = path.stat()
+    check("unchanged, wrong mode: fixed to 0600", stat.S_IMODE(after.st_mode), 0o600)
+    check("unchanged, wrong mode: same inode (no rewrite)", after.st_ino, before.st_ino)
+    check("unchanged, wrong mode: same mtime (no rewrite)",
+          after.st_mtime_ns, before.st_mtime_ns)
+    check("unchanged, wrong mode: content intact", path.read_text(), "A=1\nB=2\n")
+
+# --- The existing file's owner is preserved on a real (changed) write -------
+# Only meaningful as root: changing a file's uid requires root, so setting
+# up "a file owned by someone else" is itself a root-only operation.
+if os.geteuid() == 0:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / ".env"
+        path.write_text("A=1\n")
+        os.chown(path, 65534, 65534)  # nobody:nogroup - distinct from root
+
+        write_env(str(path), "A=2\n")
+        after = path.stat()
+        check("owner preserved across a rewrite",
+              (after.st_uid, after.st_gid), (65534, 65534))
+else:
+    print("test_atomic_env: owner-preservation case skipped (not root)")
+
+# --- A brand new file is left owned by whoever created it (no existing file
+# to inherit from) --------------------------------------------------------
+with tempfile.TemporaryDirectory() as tmp:
+    path = pathlib.Path(tmp) / ".env"
+    write_env(str(path), "A=1\n")
+    check("new file: owned by the current process",
+          path.stat().st_uid, os.geteuid())
+
+# --- The directory is fsynced too, after the rename (durability) -----------
+# A real fsync still runs underneath (this is a spy, not a mock-away) --
+# only that it was called more than once (file content, then the directory)
+# is what this pins.
+with tempfile.TemporaryDirectory() as tmp:
+    path = pathlib.Path(tmp) / ".env"
+    path.write_text("A=1\n")
+    real_fsync = os.fsync
+    synced = []
+
+    def spy_fsync(fd):
+        synced.append(fd)
+        return real_fsync(fd)
+
+    with mock.patch("os.fsync", new=spy_fsync):
+        write_env(str(path), "A=2\n")
+    check("fsync called for both the file and the directory",
+          len(synced) >= 2, True)
 
 if failures:
     print("\n".join(failures))
