@@ -100,6 +100,11 @@ with tempfile.TemporaryDirectory() as tmp:
     check("rotation: five backups kept",
           sorted(p.name for p in directory.iterdir()),
           ["reset-error.log"] + [f"reset-error.log.{n}" for n in range(1, 6)])
+    # Each backup was rotated at 5 MiB: full but for the one line that did
+    # not fit, a quarter of a MiB here.
+    check("rotation: backups rotated at 5 MiB",
+          [name for name in (f"reset-error.log.{n}" for n in range(1, 6))
+           if not 4.5 * MIB < (directory / name).stat().st_size <= 5 * MIB], [])
 
 # --- A crash reaches the file, traceback included -------------------------------
 def crash(target, run):

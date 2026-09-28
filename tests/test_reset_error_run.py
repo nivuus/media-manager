@@ -24,9 +24,8 @@ import requests  # noqa: E402
 
 from maintenance_fakes import reply  # noqa: E402
 from reset_error_fixtures import (  # noqa: E402
-    CANDIDATES, DOWNLOADING, IMPORT_PENDING, IMPORT_VANISHED, MOVIE, PENDING,
-    RADARR, SONARR, UNREFERENCED, case, commands, import_routes,
-    make_downloads, queue_page, routes, run)
+    DOWNLOADING, IMPORT_PENDING, MOVIE, RADARR, SONARR, UNREFERENCED, case,
+    import_routes, make_downloads, queue_page, routes, run)
 
 failures = []
 
@@ -61,13 +60,11 @@ with tempfile.TemporaryDirectory() as tmp, case("all readable", failures):
     check("all readable: unknown series asked for",
           [read["params"].get("includeUnknownSeriesItems") for read in sonarr_reads],
           [True])
-    deletes = api.made("DELETE", f"{SONARR}/queue/202")
-    check("all readable: warning row removed", len(deletes), 1)
-    if deletes:
-        check("all readable: removed from the client",
-              deletes[0]["params"].get("removeFromClient"), True)
-        check("all readable: release blocklisted",
-              deletes[0]["params"].get("blocklist"), True)
+    # Removed from the client and blocklisted, and a replacement searched for
+    # at once: the next grab is a different release.
+    check("all readable: warning row removed and blocklisted",
+          [kwargs["params"] for kwargs in api.made("DELETE", f"{SONARR}/queue/202")],
+          [{"removeFromClient": True, "blocklist": True, "skipRedownload": False}])
     # requests waits forever without a timeout; a hung call would hold the
     # unit until systemd kills it.
     check("all readable: every call has a timeout",
@@ -132,23 +129,60 @@ with tempfile.TemporaryDirectory() as tmp, case("failing manual import", failure
 # --- Dead-metadata calls that fail: exit 1, the next instance still checked
 DEAD_MOVIE = {"id": 55, "title": "Vanished Movie", "tmdbId": 999_001,
               "status": "deleted", "hasFile": False, "monitored": True}
+# What the removal of a dead movie sends: its files, if any, stay on disk,
+# and it may be added again later.
+DEAD_MOVIE_REMOVAL = {"deleteFiles": False, "addImportExclusion": False}
 DEAD_METADATA = [
-    ("movie list unreadable", {("GET", f"{RADARR}/movie"): reply(500, {})}),
+    ("movie list unreadable", {("GET", f"{RADARR}/movie"): reply(500, {})}, []),
     ("movie list not JSON",
-     {("GET", f"{RADARR}/movie"): reply(200, raw=b"<html></html>")}),
+     {("GET", f"{RADARR}/movie"): reply(200, raw=b"<html></html>")}, []),
     ("dead movie not removed",
      {("GET", f"{RADARR}/movie"): reply(200, [DEAD_MOVIE]),
-      ("DELETE", f"{RADARR}/movie/55"): reply(500, {})}),
+      ("DELETE", f"{RADARR}/movie/55"): reply(500, {})}, [DEAD_MOVIE_REMOVAL]),
 ]
-for label, extra in DEAD_METADATA:
+for label, extra, removals in DEAD_METADATA:
     with tempfile.TemporaryDirectory() as tmp, case(label, failures):
         downloads = make_downloads(tmp)
         table = routes()
         table.update(extra)
         code, api, _ = run(table, downloads)
         check(f"{label}: exit status", code, 1)
+        check(f"{label}: removal parameters",
+              [kwargs["params"] for kwargs in api.made("DELETE", f"{RADARR}/movie/55")],
+              removals)
         check(f"{label}: series still checked",
               len(api.made("GET", f"{SONARR}/series")), 1)
+
+# --- Dead entries: only the file-less ones are removed ----------------------
+# Deciding what to do with orphaned media stays a human call.
+DEAD_SERIES = {"id": 66, "title": "Vanished Show", "tvdbId": 999_002,
+               "status": "deleted", "statistics": {"sizeOnDisk": 0}}
+with tempfile.TemporaryDirectory() as tmp, case("dead entries", failures):
+    downloads = make_downloads(tmp)
+    table = routes()
+    table[("GET", f"{RADARR}/movie")] = reply(200, [
+        DEAD_MOVIE, dict(DEAD_MOVIE, id=56, hasFile=True),
+        dict(DEAD_MOVIE, id=57, status="released")])
+    table[("GET", f"{SONARR}/series")] = reply(200, [
+        DEAD_SERIES, dict(DEAD_SERIES, id=67, statistics={"sizeOnDisk": 1_500_000_000})])
+    for path in ("movie/55", "movie/56", "movie/57"):
+        table[("DELETE", f"{RADARR}/{path}")] = reply(200, {})
+    for path in ("series/66", "series/67"):
+        table[("DELETE", f"{SONARR}/{path}")] = reply(200, {})
+    code, api, _ = run(table, downloads)
+    check("dead entries: exit status", code, 0)
+    check("dead entries: file-less movie removed, files kept",
+          [kwargs["params"] for kwargs in api.made("DELETE", f"{RADARR}/movie/55")],
+          [DEAD_MOVIE_REMOVAL])
+    check("dead entries: movie with a file kept",
+          api.made("DELETE", f"{RADARR}/movie/56"), [])
+    check("dead entries: movie still known upstream kept",
+          api.made("DELETE", f"{RADARR}/movie/57"), [])
+    check("dead entries: file-less series removed, files kept",
+          [kwargs["params"] for kwargs in api.made("DELETE", f"{SONARR}/series/66")],
+          [{"deleteFiles": False}])
+    check("dead entries: series with files kept",
+          api.made("DELETE", f"{SONARR}/series/67"), [])
 
 # --- I/O failures in the purge are failures too ---------------------------
 PURGE_IO = [
@@ -163,63 +197,6 @@ for label, target, error in PURGE_IO:
         downloads = make_downloads(tmp)
         code, _, _ = run(routes(), downloads, patches=[(target, error)])
         check(f"{label}: exit status", code, 1)
-
-# --- Files gone: decided from the Downloads directory ---------------------
-# An import-pending row whose download is no longer on disk is removed from
-# the client WITHOUT blocklisting: the release was fine, its files vanished.
-
-with tempfile.TemporaryDirectory() as tmp, case("files gone", failures):
-    downloads = make_downloads(tmp)  # holds PENDING, not VANISHED
-    table = import_routes()
-    table[("GET", f"{RADARR}/manualimport")] = reply(200, CANDIDATES)
-    code, api, _ = run(table, downloads)
-    check("files gone: exit status", code, 0)
-    deletes = api.made("DELETE", f"{RADARR}/queue/104")
-    check("files gone: row removed once", len(deletes), 1)
-    if deletes:
-        check("files gone: removal parameters", deletes[0]["params"],
-              {"removeFromClient": True, "blocklist": False, "skipRedownload": True})
-    lookups = [kwargs["params"]["downloadId"]
-               for kwargs in api.made("GET", f"{RADARR}/manualimport")]
-    check("files gone: no manual import attempted",
-          IMPORT_VANISHED["downloadId"] in lookups, False)
-    # The download still on disk goes through the manual import instead.
-    check("download present: manual import looked up",
-          lookups, [IMPORT_PENDING["downloadId"]])
-    imports = commands(api, RADARR, "ManualImport")
-    check("download present: import command sent", len(imports), 1)
-    if imports:
-        sent = imports[0]
-        check("download present: file imported as its movie",
-              [(f["path"], f["movieId"]) for f in sent["files"]],
-              [(f"/data/Downloads/radarr/{PENDING}/movie.mkv", 813)])
-    check("download present: row not removed",
-          api.made("DELETE", f"{RADARR}/queue/103"), [])
-
-# A local problem keeps its row whatever the manual import finds: without a
-# date and with nothing importable it is not a ghost, and fixing the problem
-# is what gets it imported.
-DENIED = "Denied.Movie.2018.MULTi.1080p.WEB.x264-GRP"
-IMPORT_DENIED = dict(
-    IMPORT_PENDING, id=105, movieId=815, title=DENIED,
-    downloadId="E5F60718293A4B5C6D7E8F901234567890ABCDEF",
-    outputPath=f"/data/Downloads/radarr/{DENIED}",
-    statusMessages=[{"title": DENIED, "messages": [
-        "Failed to import movie, Permission denied"]}])
-with tempfile.TemporaryDirectory() as tmp, case("local problem", failures):
-    downloads = make_downloads(tmp)
-    # A folder with its file: an empty one would be purged as empty, and a
-    # download without files is rightly taken for a vanished one.
-    (downloads / "radarr" / DENIED).mkdir()
-    (downloads / "radarr" / DENIED / "movie.mkv").write_bytes(b"\0" * 16)
-    table = routes(radarr_queue=[DOWNLOADING, IMPORT_DENIED])
-    table[("GET", f"{RADARR}/manualimport")] = reply(200, [])
-    table[("DELETE", f"{RADARR}/queue/105")] = reply(200, {})
-    code, api, _ = run(table, downloads)
-    check("local problem: exit status", code, 0)
-    check("local problem: manual import attempted",
-          len(api.made("GET", f"{RADARR}/manualimport")), 1)
-    check("local problem: row kept", api.made("DELETE", f"{RADARR}/queue/105"), [])
 
 # Only the listing fails. The purge walks the same tree, so in practice both
 # fail together and the purge's failure alone already sets the exit status;

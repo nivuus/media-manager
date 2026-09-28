@@ -5,9 +5,10 @@ With the media disk unmounted, Docker recreates the bind sources as empty
 directories and Radarr/Sonarr report every download as holding no files, so
 every rule, not only files-gone, would act on a broken view. Before any
 action the run therefore checks that DOWNLOADS_DIR is a directory and that no
-root folder of any instance reports accessible: false. When a check fails it
-changes nothing — no purge, no queue removal, no manual import, no
-dead-metadata deletion — records a failure naming the check, and exits 1.
+root folder of any instance reports accessible: false. When a check fails the
+run makes no other call — no download client test, queue refresh or queue
+read, so no removal, manual import or dead-metadata deletion — and does not
+purge; it records a failure naming the check, and exits 1.
 
 Run: python3 tests/test_reset_error_storage.py
 """
@@ -34,9 +35,14 @@ def check(label, got, want):
         failures.append(f"{label}: got {got!r}, want {want!r}")
 
 
-def changes(api):
-    """Every call that changes something on a server: anything but a GET."""
-    return [(method, url) for method, url, _ in api.calls if method != "GET"]
+# The guard's own reads, and all a tripped guard may send: not even a
+# queue read, a download client test or a queue refresh follows.
+ROOTFOLDER_READS = [("GET", f"{RADARR}/rootfolder"), ("GET", f"{SONARR}/rootfolder")]
+
+
+def calls(api):
+    """(method, url) of every call the run made, in order."""
+    return [(method, url) for method, url, _ in api.calls]
 
 
 def named(log_lines, *words):
@@ -50,7 +56,7 @@ with tempfile.TemporaryDirectory() as tmp, case("downloads missing", failures):
     missing = pathlib.Path(tmp) / "Downloads"
     code, api, log = run(import_routes(), missing)
     check("downloads missing: exit status", code, 1)
-    check("downloads missing: nothing changed", changes(api), [])
+    check("downloads missing: only the root folders read", calls(api), ROOTFOLDER_READS)
     check("downloads missing: not created", missing.exists(), False)
     check("downloads missing: check named", named(log, str(missing)), True)
 
@@ -62,7 +68,8 @@ with tempfile.TemporaryDirectory() as tmp, case("root folder inaccessible", fail
         200, [dict(RADARR_ROOT, accessible=False, freeSpace=None)])
     code, api, log = run(table, downloads)
     check("root folder inaccessible: exit status", code, 1)
-    check("root folder inaccessible: nothing changed", changes(api), [])
+    check("root folder inaccessible: only the root folders read", calls(api),
+          ROOTFOLDER_READS)
     check("root folder inaccessible: purge skipped",
           (downloads / UNREFERENCED).exists(), True)
     check("root folder inaccessible: check named",
@@ -83,7 +90,8 @@ for label, answer in UNREADABLE:
         table[("GET", f"{SONARR}/rootfolder")] = answer
         code, api, log = run(table, downloads)
         check(f"rootfolder {label}: exit status", code, 1)
-        check(f"rootfolder {label}: nothing changed", changes(api), [])
+        check(f"rootfolder {label}: only the root folders read", calls(api),
+              ROOTFOLDER_READS)
         check(f"rootfolder {label}: purge skipped",
               (downloads / UNREFERENCED).exists(), True)
         check(f"rootfolder {label}: check named",
