@@ -264,6 +264,15 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
           sorted(p.name for p in victim.iterdir()), [])
     check("symlinked ancestor: symlink itself untouched",
           (dest / "tdarr" / "server").is_symlink(), True)
+    # fix round 2, item B: docker-compose.yml and env.template sort BEFORE
+    # tdarr/server/marker.txt (d < e < t), so a per-file ancestor check run
+    # inside the copy loop lets both land before the symlinked one is even
+    # reached — a partial deploy, demonstrated by the re-review. The
+    # pre-flight must refuse the whole batch before writing anything.
+    check("symlinked ancestor: nothing else deployed either (compose)",
+          (dest / "docker-compose.yml").exists(), False)
+    check("symlinked ancestor: nothing else deployed either (env.template)",
+          (dest / "env.template").exists(), False)
 
 # --- Root writes never follow symlinks: a hijacked destination file -------
 # The final path component is replaced (os.replace), never opened and

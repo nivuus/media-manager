@@ -138,6 +138,20 @@ def _check_no_symlink_ancestors(dest_root, target):
             raise RuntimeError(f"refusing to write through a symlink: {current}")
 
 
+def _validate_destinations(dest_root, relpaths):
+    """Check every destination path's existing ancestors before the first
+    write, for the same all-or-nothing reason as _validate_sources: a
+    symlink discovered on the fourth of twenty destination paths must not
+    leave the first three already replaced (re-review finding: with the
+    check running inside the copy loop instead, docker-compose.yml was
+    deployed before the phase exited 1). This narrows the window; it is not
+    the race-proof check — _write_file's directory-fd walk is, and runs
+    regardless, per file, at write time.
+    """
+    for rel in relpaths:
+        _check_no_symlink_ancestors(dest_root, os.path.join(dest_root, rel))
+
+
 def _open_dir_component(parent_fd, name):
     """Open `name` under parent_fd, refusing anything but a real directory.
 
@@ -271,6 +285,7 @@ def copy_stack(pkg_dir, stack_dir, dest):
                if os.path.basename(rel) != ENV_BASENAME]
 
     _validate_sources(stack_dir, relpaths)
+    _validate_destinations(dest, relpaths)
     # dest itself (and any of ITS OWN missing ancestors, e.g. a fresh
     # root/opt/nivuus/ on a first install) sits above the threat model this
     # module defends against: nothing a container's bind mount reaches
@@ -281,6 +296,4 @@ def copy_stack(pkg_dir, stack_dir, dest):
 
     for rel in relpaths:
         source = os.path.join(stack_dir, rel)
-        target = os.path.join(dest, rel)
-        _check_no_symlink_ancestors(dest, target)
         _write_file(dest, rel, source)
