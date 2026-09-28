@@ -364,6 +364,33 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     check("archive export: file deployed",
           (dest / "docker-compose.yml").is_file(), True)
 
+# --- A failing git command fails the install loudly, never a fallback -----
+# Ruling 18: git 2.47 on the reference host refuses a repository it does not
+# own when run as root ("dubious ownership"). Whatever the reason, a
+# non-zero exit from `git ls-files` must never be read as "not a checkout"
+# (that fallback is exactly what would ship an untracked .env or
+# config.xml) — it must fail the phase with nothing deployed at all. A `.git`
+# that exists but is not a valid repository pointer reproduces a real
+# `git ls-files` failure without mocking anything.
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    shutil.copytree(REPO / "hooks", pkg / "hooks")
+    shutil.copytree(REPO / "systemd", pkg / "systemd")
+    (pkg / "stack").mkdir()
+    shutil.copy2(REPO / "stack" / "env.template", pkg / "stack" / "env.template")
+    (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
+    (pkg / ".git").write_text("not a real git repository\n")
+    fake_group_file(root)
+
+    proc = subprocess.run(
+        [sys.executable, str(pkg / "hooks" / "install.py"),
+         "--phase", "install", "--root", root],
+        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg))
+    check("broken git: exit status", proc.returncode, 1)
+    check("broken git: command named", "ls-files" in proc.stderr, True)
+    check("broken git: no fallback, nothing deployed at all",
+          (pathlib.Path(root) / DEST_REL).exists(), False)
+
 # --- The git command's exact argv is pinned (Ruling 18) --------------------
 # git 2.47 on the reference host refuses a repository it does not own when
 # run as root ("detected dubious ownership": the checkout is the operator's,
