@@ -240,27 +240,38 @@ def _write_file(dest_root, rel, source):
     itself is finally replaced by (dir_fd, name), never by a path string
     that could be re-resolved after being checked. See the module
     docstring for what this closes and why.
+
+    The source is opened and fstat'd BEFORE the temp file is created, not
+    after: source vanishing or turning out to be a directory used to raise
+    with a temp fd already allocated, and the sole cleanup path (the
+    except clause a few lines down) only unlinked the temp NAME, never
+    closed the fd itself — a leak on every such failure. Opening the
+    source first means there is nothing to leak in that case; once the
+    temp fd is created, the very next statement wraps it in `with
+    os.fdopen(...)`, whose __exit__ closes it on any failure from that
+    point on.
     """
     rel_dir, name = os.path.split(rel)
     dir_fd = _open_dest_dir_fd(dest_root, rel_dir)
     try:
-        tmp_name, fd = _create_temp_component(dir_fd, name)
-        try:
-            src_stat = os.stat(source)
-            with open(source, "rb") as src, os.fdopen(fd, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-                dst.flush()
-                os.fchmod(dst.fileno(), stat.S_IMODE(src_stat.st_mode))
-                os.utime(dst.fileno(),
-                         ns=(src_stat.st_atime_ns, src_stat.st_mtime_ns))
-                os.fsync(dst.fileno())
-            os.replace(tmp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-        except BaseException:
+        with open(source, "rb") as src:
+            src_stat = os.fstat(src.fileno())
+            tmp_name, fd = _create_temp_component(dir_fd, name)
             try:
-                os.unlink(tmp_name, dir_fd=dir_fd)
-            except FileNotFoundError:
-                pass
-            raise
+                with os.fdopen(fd, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                    dst.flush()
+                    os.fchmod(dst.fileno(), stat.S_IMODE(src_stat.st_mode))
+                    os.utime(dst.fileno(),
+                             ns=(src_stat.st_atime_ns, src_stat.st_mtime_ns))
+                    os.fsync(dst.fileno())
+                os.replace(tmp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            except BaseException:
+                try:
+                    os.unlink(tmp_name, dir_fd=dir_fd)
+                except FileNotFoundError:
+                    pass
+                raise
     finally:
         os.close(dir_fd)
 

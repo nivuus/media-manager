@@ -19,8 +19,10 @@ both the source and the destination side.
 Run: python3 tests/test_safe_copy.py
 """
 import json
+import os
 import pathlib
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -379,6 +381,54 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
           sorted(p.name for p in victim.iterdir()), [])
     check("mid-routine swap: swap itself left in place, not written through",
           (dest / "tdarr" / "server").is_symlink(), True)
+
+# --- N1 (fix round 3): the temp fd must not leak when the source is bad ---
+# _write_file used to create the temp file/fd BEFORE stat-ing or opening the
+# source: os.stat(source) or open(source, "rb") raising left the temp file
+# unlinked (the except clause did that) but its fd never closed — a leak on
+# every such failure. _open_fd_count uses /proc/self/fd, Linux-specific like
+# the rest of this module's dir_fd usage.
+def _open_fd_count():
+    return len(os.listdir("/proc/self/fd"))
+
+
+with tempfile.TemporaryDirectory() as root:
+    dest = pathlib.Path(root) / "dest"
+    (dest / "sub").mkdir(parents=True)
+
+    before = _open_fd_count()
+    caught = None
+    try:
+        safe_copy._write_file(str(dest), "sub/missing.txt",
+                              str(dest / "sub" / "does-not-exist.txt"))
+    except OSError as exc:
+        caught = exc
+    after = _open_fd_count()
+
+    check("missing source: raised a clean OSError", isinstance(caught, OSError), True)
+    check("missing source: no fd leak", after, before)
+    check("missing source: no stray temp file left behind",
+          list((dest / "sub").iterdir()), [])
+
+with tempfile.TemporaryDirectory() as root:
+    dest = pathlib.Path(root) / "dest"
+    (dest / "sub").mkdir(parents=True)
+    a_directory = pathlib.Path(root) / "a-directory"
+    a_directory.mkdir()
+
+    before = _open_fd_count()
+    caught = None
+    try:
+        safe_copy._write_file(str(dest), "sub/missing.txt", str(a_directory))
+    except OSError as exc:
+        caught = exc
+    after = _open_fd_count()
+
+    check("directory as source: raised a clean OSError",
+          isinstance(caught, OSError), True)
+    check("directory as source: no fd leak", after, before)
+    check("directory as source: no stray temp file left behind",
+          list((dest / "sub").iterdir()), [])
 
 # --- A failing git command fails the install loudly, never a fallback -----
 # Ruling 18: git 2.47 on the reference host refuses a repository it does not
