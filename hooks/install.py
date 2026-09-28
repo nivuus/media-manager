@@ -203,15 +203,35 @@ def place_unit(name, dest_dir):
     os.chmod(dest, 0o644)
 
 
+def _is_our_dropin(path):
+    """True only for the exact file this hook itself would have written.
+
+    Never a symlink (it could point anywhere, and removing it would not be
+    "removing our content" but removing whatever name an operator or another
+    tool chose to put there) and never a directory (os.path.isfile is False
+    for one, so this returns False instead of letting a later open() crash
+    the hook). Any other content at the path — an operator's drop-in for a
+    different notifier, most likely — is left alone: this is provenance, not
+    "the path is ours because we chose the name."
+    """
+    if os.path.islink(path) or not os.path.isfile(path):
+        return False
+    try:
+        with open(path) as fh:
+            return fh.read() == FAILURE_DROPIN_CONTENT
+    except OSError:
+        return False
+
+
 def sync_failure_dropins(root):
     """Write or drop the OnFailure= alert drop-in for each maintenance service.
 
     Only the three .service units get one (cleanup included: an operator who
     runs it by hand still wants the alert) — never the .timer units, which
-    never fail themselves. When the host has no systemd-failure-notify@, any
-    drop-in a previous install left behind is removed, and nothing else in
-    that directory is touched (an operator may have added their own drop-in
-    next to it).
+    never fail themselves. When the host has no systemd-failure-notify@, a
+    drop-in a previous install left behind is removed — but only when it is
+    still exactly that (see _is_our_dropin); nothing else at that path, and
+    nothing else in that directory, is ever touched.
     """
     unit_dir = os.path.join(root, UNIT_REL_DIR)
     notify_present = os.path.isfile(os.path.join(unit_dir, FAILURE_NOTIFY_UNIT))
@@ -221,7 +241,7 @@ def sync_failure_dropins(root):
             os.makedirs(os.path.dirname(dropin), exist_ok=True)
             with open(dropin, "w") as fh:
                 fh.write(FAILURE_DROPIN_CONTENT)
-        elif os.path.exists(dropin):
+        elif _is_our_dropin(dropin):
             os.remove(dropin)
 
 

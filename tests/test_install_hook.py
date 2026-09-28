@@ -291,6 +291,47 @@ with tempfile.TemporaryDirectory() as root:
     check("failure-notify removed: sibling file untouched",
           sibling.read_text(), "# kept\n")
 
+# --- Drop-in removal checks provenance: only OUR exact file is ever touched
+# A scratch run found this: any file at 10-on-failure.conf was deleted, so an
+# operator's own drop-in for a DIFFERENT notifier was destroyed, and a
+# directory at that path crashed the hook outright. The fix only removes a
+# regular file (never a symlink) whose content matches exactly.
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    other = dropin_path(root, "media-manager-reset-error.service")
+    other.parent.mkdir(parents=True)
+    other.write_text("[Unit]\nOnFailure=some-other-notifier@%n.service\n")
+
+    proc = run(root, ANSWERS)
+    check("other content: exit status", proc.returncode, 0)
+    check("other content: survives", other.read_text(),
+          "[Unit]\nOnFailure=some-other-notifier@%n.service\n")
+
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    linked = dropin_path(root, "media-manager-update-wanted.service")
+    linked.parent.mkdir(parents=True)
+    real_target = linked.parent / "real-target.conf"
+    real_target.write_text(DROPIN_CONTENT)  # matches exactly, through the link
+    linked.symlink_to(real_target)
+
+    proc = run(root, ANSWERS)
+    check("symlink: exit status", proc.returncode, 0)
+    check("symlink: survives as a symlink", linked.is_symlink(), True)
+    check("symlink: target untouched", real_target.read_text(), DROPIN_CONTENT)
+
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    as_dir = dropin_path(root, "media-manager-cleanup.service")
+    as_dir.mkdir(parents=True)
+    (as_dir / "nested.txt").write_text("unexpected layout\n")
+
+    proc = run(root, ANSWERS)
+    check("directory in the way: exit status (no crash)", proc.returncode, 0)
+    check("directory in the way: survives", as_dir.is_dir(), True)
+    check("directory in the way: contents untouched",
+          (as_dir / "nested.txt").read_text(), "unexpected layout\n")
+
 # --- A git checkout deploys only what git tracks under stack/ -------------
 # build.sh exports via `git archive HEAD`, so an export already went through
 # the commit filter and is copied as-is. A checkout has not: copying the
