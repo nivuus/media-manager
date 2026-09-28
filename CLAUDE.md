@@ -100,10 +100,15 @@ only concluded while `MOVIES_DIR` or `TV_DIR` holds something
 recreates every bind source as an empty directory, so the root folders report
 accessible and the storage guard passes; an empty library then withholds
 files-gone for the run, with a warning, not a failure — a fresh install only
-waits for its first import. Exit status
-is 1 on any API/I/O failure — the install hook wires that to
-`OnFailure=systemd-failure-notify@%n.service` through a drop-in, when the
-host provides that unit. Logs go to stdout (the journal) and to
+waits for its first import. Exit status is 1 on any API/I/O failure — the
+install hook wires that to `OnFailure=systemd-failure-notify@%n.service`
+through a drop-in, when the host provides that unit. One such alert is
+expected after a reboot that missed 06:00: the timer is `Persistent=true`
+and the unit is only ordered `After=docker.service`, so the catch-up run at
+boot can reach Radarr/Sonarr before they listen; the storage guard records
+"rootfolder endpoint unreadable", nothing is changed, and the run exits 1.
+There is deliberately no readiness wait: it would hide a real outage for as
+long as it waited. Logs go to stdout (the journal) and to
 `/var/log/media-manager/reset-error.log`, rotated at 5 x 5 MiB. Lancé
 quotidiennement à 06:00 par `media-manager-reset-error.timer`, livré par le
 package.
@@ -121,9 +126,12 @@ then the rest of the budget from the backlog ordered by `lastSearchTime`
 ascending, never-searched first — deterministic and stateless, there is no
 state file to keep in sync (do not reintroduce `.update_wanted_state`).
 Instances are spaced by `DELAY_BETWEEN_INSTANCES` (120s). Unreleased/unaired
-items are skipped. Exit status is 1 if any instance failed. Searching
-everything at once made the indexers answer 429 and Prowlarr disabled them
-for hours. Logs go to stdout and to
+items are skipped. Exit status is 1 if any instance failed. The same boot
+catch-up applies after a reboot that missed 07:00: an instance not listening
+yet records "cannot fetch the missing list", is not searched, and the run
+exits 1 — one expected `OnFailure=` alert, and no readiness wait, for the
+same reason. Searching everything at once made the indexers answer 429 and
+Prowlarr disabled them for hours. Logs go to stdout and to
 `/var/log/media-manager/update-wanted.log`, same rotation as above.
 
 **Disk Cleanup** (`stack/media_cleanup.py`): frees space by deleting the
