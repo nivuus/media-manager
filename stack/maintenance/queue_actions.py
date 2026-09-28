@@ -4,7 +4,7 @@ The actions are the manual import of a finished download and the removal of
 a queue row, with or without blocklisting its release. Every API failure
 raises ApiError: the caller records it.
 """
-from maintenance.arr_api import ApiError, call, get_json
+from maintenance.arr_api import ApiError, call, get_json, get_json_list, object_list
 
 # The manual-import lookup makes Radarr/Sonarr scan the download and ffprobe
 # every file in it: allow it longer than an ordinary call.
@@ -40,9 +40,8 @@ def fetch_queue(instance):
     else:
         params['includeUnknownSeriesItems'] = True
     queue = get_json(instance, 'queue', params=params)
-    records = queue.get('records') if isinstance(queue, dict) else None
-    if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
-        raise ApiError("the queue answer has no 'records' list of rows")
+    records = object_list(queue.get('records') if isinstance(queue, dict) else None,
+                          "the 'records' of the queue answer")
     total = queue.get('totalRecords')
     if not isinstance(total, int):
         raise ApiError("the queue answer has no 'totalRecords' count")
@@ -125,12 +124,10 @@ def manual_import(instance, item):
     if not download_id:
         return False
 
-    candidates = get_json(
+    candidates = get_json_list(
         instance, 'manualimport',
         params={'downloadId': download_id, 'filterExistingFiles': True},
         timeout=MANUAL_IMPORT_TIMEOUT)
-    if not isinstance(candidates, list) or not all(isinstance(c, dict) for c in candidates):
-        raise ApiError('the manual-import answer is not a list of candidates')
 
     files = [f for f in (build_import_file(c, instance.kind) for c in candidates) if f]
     if not files:

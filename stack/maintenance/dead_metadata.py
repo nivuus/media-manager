@@ -6,7 +6,7 @@ deciding what to do with orphaned media stays a human call.
 """
 import logging
 
-from maintenance.arr_api import ApiError, call, get_json
+from maintenance.arr_api import ApiError, call, get_json_list
 
 log = logging.getLogger(__name__)
 
@@ -31,9 +31,7 @@ def remove_dead_entries(instances, failures):
 def _remove_dead(instance, failures, resource, upstream, describe, has_files,
                  delete_params):
     try:
-        entries = get_json(instance, resource)
-        if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
-            raise ApiError(f'the {resource} answer is not a list of entries')
+        entries = get_json_list(instance, resource)
     except ApiError as error:
         failures.record(f'[{instance}] cannot list the {resource} entries', error)
         return

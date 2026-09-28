@@ -90,13 +90,41 @@ def call(instance, method, path, *, params=None, payload=None,
     return response
 
 
-def get_json(instance, path, *, params=None, timeout=DEFAULT_TIMEOUT):
-    """GET a resource and return its decoded body; ApiError if it is not JSON."""
-    response = call(instance, 'GET', path, params=params, timeout=timeout)
+def call_json(instance, method, path, *, params=None, payload=None,
+              timeout=DEFAULT_TIMEOUT):
+    """One API v3 call, returning its decoded body.
+
+    Raises ApiError as call() does, and when the body is not JSON.
+    """
+    response = call(instance, method, path, params=params, payload=payload,
+                    timeout=timeout)
     try:
         return response.json()
     except ValueError as error:  # requests' JSONDecodeError is a ValueError
-        raise ApiError(f'GET /api/v3/{path}: the answer is not JSON ({error})') from error
+        raise ApiError(f'{method} /api/v3/{path}: the answer is not JSON ({error})') from error
+
+
+def get_json(instance, path, *, params=None, timeout=DEFAULT_TIMEOUT):
+    """GET a resource and return its decoded body; ApiError if it is not JSON."""
+    return call_json(instance, 'GET', path, params=params, timeout=timeout)
+
+
+def object_list(value, what):
+    """`value` when it is a list of JSON objects; ApiError saying `what` is not."""
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ApiError(f'{what} is not a list of objects')
+    return value
+
+
+def get_json_list(instance, path, *, params=None, timeout=DEFAULT_TIMEOUT):
+    """GET a collection and return its items.
+
+    Raises ApiError as get_json() does, and when the answer is not a list of
+    objects: the caller loops over the items and reads each with .get(), so
+    any other shape must stop it here, not halfway through the loop.
+    """
+    return object_list(get_json(instance, path, params=params, timeout=timeout),
+                       f'the answer to GET /api/v3/{path}')
 
 
 class Failures:

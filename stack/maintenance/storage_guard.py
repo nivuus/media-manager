@@ -13,7 +13,7 @@ library proves nothing (a fresh install has one).
 """
 import os
 
-from maintenance.arr_api import ApiError, get_json
+from maintenance.arr_api import ApiError, get_json_list
 
 
 def storage_problems(instances, downloads_dir):
@@ -29,9 +29,7 @@ def storage_problems(instances, downloads_dir):
         problems.append(f'downloads directory {downloads_dir} is not a directory')
     for instance in instances:
         try:
-            folders = get_json(instance, 'rootfolder')
-            if not isinstance(folders, list) or not all(isinstance(f, dict) for f in folders):
-                raise ApiError('the answer is not a list of root folders')
+            folders = get_json_list(instance, 'rootfolder')
         except ApiError as error:
             problems.append(f'rootfolder endpoint unreadable on {instance} ({error})')
             continue

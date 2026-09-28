@@ -85,6 +85,8 @@ UNREADABLE = [
     ("records not a list",
      reply(200, {"page": 1, "pageSize": 1000, "totalRecords": 1,
                  "records": {"id": 101}})),
+    ("records holding a non-object",
+     reply(200, {"page": 1, "pageSize": 1000, "totalRecords": 1, "records": ["101"]})),
     ("no totalRecords", reply(200, {"page": 1, "pageSize": 1000,
                                     "records": [DOWNLOADING]})),
     # More rows than one page: the rest would go unprotected.
