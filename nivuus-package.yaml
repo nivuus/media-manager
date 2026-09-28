@@ -10,8 +10,11 @@ tier: userspace
 # par console avec firewalld qui tranche : un package declare ses PROPRES
 # dependances plutot que de se coupler a la liste de features du moteur, sinon
 # l'installation autonome sur une Debian ordinaire — que le contrat existe
-# precisement pour permettre — casse. Si l'operateur a coche la feature docker,
-# l'apt-get ci-dessous est un no-op idempotent.
+# precisement pour permettre — casse. Docker itself is not in the apt list
+# below at all any more (see its own comment there): activate.py's
+# ensure_docker() checks for `docker compose version` directly instead, so
+# this package works whether or not the installer's docker feature was
+# checked.
 #
 # `claims: {gpu: exclusive}` aurait ete faux. Tdarr utilise /dev/dri (QSV Intel)
 # et un second node NVENC qui PARTAGE la RTX 4070 avec la VM Windows, via les
