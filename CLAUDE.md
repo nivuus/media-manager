@@ -31,8 +31,9 @@ Quatre conséquences qui priment sur tout le reste de ce fichier :
   montage absent en root : Maintainerr, qui tourne sous `user: PUID:PGID` sans
   gérer PUID/PGID lui-même, ne pourrait pas écrire `./maintainerr` et
   échouerait au démarrage. Le hook `install` crée donc le répertoire (0750,
-  PUID/PGID rendus) et corrige le propriétaire du répertoire seul, jamais
-  récursivement ni à travers un lien symbolique.
+  PUID/PGID du `.env` effectif, y compris celui d'une installation existante)
+  et corrige le propriétaire du répertoire seul, jamais récursivement ni à
+  travers un lien symbolique.
 
 Les chemins ont changé : le compose, les trois scripts de maintenance et les
 assets Tdarr sont sous `stack/`. Le déploiement est `/opt/nivuus/media-manager`
@@ -152,11 +153,13 @@ disabled on the reference host since 2026-09-28, pending a Maintainerr pilot
 to replace it: **Maintainerr** (`maintainerr`, `127.0.0.1:6246`) is being
 piloted in a no-action mode, configured by the operator through its API. Until
 the pilot ends, `media_cleanup.py` stays shipped and unarmed; it goes away only
-once Maintainerr has proven itself. Known defects: it can overshoot the threshold (its post-delete
-check re-reads real disk usage right away, before Radarr/Sonarr's own file
-deletion is necessarily reflected on disk); a re-requested title is ranked
-first for deletion again (Tautulli watch data is keyed by title/year and
-outlives the deletion, so a freshly re-downloaded title inherits its old
+once Maintainerr has proven itself.
+
+Known defects of `media_cleanup.py`: it can overshoot the threshold (its
+post-delete check re-reads real disk usage right away, before Radarr/Sonarr's
+own file deletion is necessarily reflected on disk); a re-requested title is
+ranked first for deletion again (Tautulli watch data is keyed by title/year
+and outlives the deletion, so a freshly re-downloaded title inherits its old
 watch date and looks stale immediately); the watch-history match is done on
 the raw title text, so a Plex library using localised titles never lines up
 with Radarr/Sonarr's own title; and it carries on with partial or empty data
