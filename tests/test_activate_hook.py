@@ -1,22 +1,33 @@
 #!/usr/bin/env python3
-"""Le hook activate, verifie par ses fonctions pures et ses artefacts.
+"""The activate hook: pure functions, artifacts, and its docker/compose
+failure paths under a fake subprocess.run.
 
-Ce qui est teste ici est ce qui peut l'etre sans Docker : la lecture d'une cle
-API dans un config.xml d'*arr, le remplissage du .env, et l'armement des
-timers par symlink. Le `docker compose up -d` lui-meme est verifie a la
-bascule de production (Task 9), pas ici — le simuler ne prouverait rien.
+What is tested without a real Docker: reading an API key from an *arr's
+config.xml, filling the .env, arming timers by symlink, and run_phase()'s
+prerequisite/compose failure paths (docker missing, `config`/`ps`/`up`
+failing) with a fake subprocess.run that dispatches on argv, the same way
+maintenance_fakes.FakeApi dispatches on (method, url). A real `docker compose
+up` succeeding is still left to the production cutover — simulating a
+container actually starting would prove nothing — but a compose subcommand
+FAILING is exactly what this suite must prove, since that used to be
+silently swallowed into "nothing to create" or "no container exists" (see
+ActivationError in activate.py).
 
-La regle qui compte : fill_env ne remplit que les valeurs VIDES. En production
-le .env porte deja les cles reelles, et les ecraser par ce qu'un conteneur
-fraichement demarre a genere casserait les trois scripts de maintenance.
+The rule that matters for fill_env: it only fills EMPTY values. In
+production the .env already carries the real keys, and overwriting them with
+whatever a freshly started container generated would break the three
+maintenance scripts.
 
 Run: python3 tests/test_activate_hook.py
 """
 import importlib.util
+import io
 import pathlib
 import stat
+import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 # activate.py imports its sibling atomic_env.py the same way the deployed
@@ -183,6 +194,108 @@ with tempfile.TemporaryDirectory() as root:
         failures.append("unite absente: aucune exception levee")
     except FileNotFoundError:
         pass
+
+# --- run_phase()'s docker/compose failure paths, fake subprocess.run ------
+# Each case isolates exactly ONE failing call; the fake dispatches on argv,
+# like FakeApi dispatches on (method, url) in maintenance_fakes.py, and
+# fails the test loudly on any call it was not told to expect. None of these
+# cases may reach the harvest loop below the compose section: DEPLOY is a
+# hardcoded real path ("/opt/nivuus/media-manager"), and reaching it would
+# either touch a real path or spin in the harvest retry loop for minutes.
+
+
+def completed(argv, returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess(args=list(argv), returncode=returncode,
+                                       stdout=stdout, stderr=stderr)
+
+
+def fake_subprocess(routes):
+    def run(argv, **kwargs):
+        key = tuple(argv)
+        if key not in routes:
+            raise AssertionError(f"unexpected subprocess call: {argv}")
+        answer = routes[key]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    return run
+
+
+def run_phase_with(routes):
+    """activate.run_phase() under a fake subprocess.run: (exit code, stderr).
+
+    stdout is captured too (emit() prints progress there) so a failing case
+    does not spam this test's own output — only the assertions should.
+    """
+    captured_stderr = io.StringIO()
+    with mock.patch("subprocess.run", new=fake_subprocess(routes)), \
+         mock.patch("sys.stderr", new=captured_stderr), \
+         mock.patch("sys.stdout", new=io.StringIO()), \
+         tempfile.TemporaryDirectory() as root:
+        code = activate.run_phase(root)
+    return code, captured_stderr.getvalue()
+
+
+VERSION = ("docker", "compose", "version")
+CONFIG = ("docker", "compose", "config", "--services")
+PS_A = ("docker", "compose", "ps", "-a", "--services")
+
+# Docker itself is not installed: subprocess.run() raises, it does not
+# return a non-zero completed process.
+code, err = run_phase_with({VERSION: FileNotFoundError("[Errno 2] docker: not found")})
+check("docker command missing: exit status", code, 1)
+check("docker command missing: names the requirement",
+      "compose v2 plugin is required" in err, True)
+
+# Docker is installed but the compose v2 plugin is not.
+code, err = run_phase_with({
+    VERSION: completed(VERSION, returncode=1,
+                       stderr="docker: 'compose' is not a docker command.\n"),
+})
+check("compose plugin missing: exit status", code, 1)
+check("compose plugin missing: names the requirement",
+      "compose v2 plugin is required" in err, True)
+check("compose plugin missing: stderr detail kept",
+      "is not a docker command" in err, True)
+
+# `docker compose config --services` fails: must raise, not read as "nothing
+# to create" (which used to make the phase report success regardless).
+code, err = run_phase_with({
+    VERSION: completed(VERSION),
+    CONFIG: completed(CONFIG, returncode=1,
+                      stderr="services.radarr.image: required\n"),
+})
+check("config fails: exit status", code, 1)
+check("config fails: command named", "compose config" in err, True)
+check("config fails: stderr kept", "services.radarr.image" in err, True)
+
+# `docker compose ps -a --services` fails: must raise, not read as "no
+# container exists" (which used to send every service through `up -d`,
+# including ones the console package's hooks deliberately stopped).
+code, err = run_phase_with({
+    VERSION: completed(VERSION),
+    CONFIG: completed(CONFIG, stdout="radarr\nsonarr\n"),
+    PS_A: completed(PS_A, returncode=1,
+                    stderr="Cannot connect to the Docker daemon\n"),
+})
+check("ps -a fails: exit status", code, 1)
+check("ps -a fails: command named", "compose ps -a" in err, True)
+check("ps -a fails: stderr kept", "Cannot connect to the Docker daemon" in err, True)
+
+# `docker compose up -d ...` fails: must make the phase exit non-zero too,
+# even when it is not a total failure (some services already exist).
+UP = ("docker", "compose", "up", "-d", "sonarr", "tdarr-node-nvenc")
+code, err = run_phase_with({
+    VERSION: completed(VERSION),
+    CONFIG: completed(CONFIG, stdout="radarr\nsonarr\ntdarr-node-nvenc\n"),
+    PS_A: completed(PS_A, stdout="radarr\n"),
+    UP: completed(UP, returncode=1,
+                 stderr="Error response from daemon: could not select "
+                        "device driver\n"),
+})
+check("up fails: exit status", code, 1)
+check("up fails: command named", "compose up -d" in err, True)
+check("up fails: stderr kept", "could not select device driver" in err, True)
 
 if failures:
     print("\n".join(failures))

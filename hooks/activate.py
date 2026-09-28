@@ -3,6 +3,13 @@
 
 Trois choses, dans cet ordre, parce que chacune depend de la precedente.
 
+Before any of that: DOCKER ITSELF IS CHECKED. It is only an apt dependency
+this package declares (nivuus-package.yaml), not something the installer
+engine guarantees, so ensure_docker() runs `docker compose version` first
+and fails with an English message naming what is missing — instead of
+leaving the first real compose call to fail cryptically, or crash outright
+if the docker command does not exist at all.
+
 1. DEMARRER LA PILE — mais SEULEMENT les services qui n'ont aucun conteneur.
    C'est ici, et pas en phase install, parce qu'il faut le reseau : quatorze
    images doivent etre tirees.
@@ -16,11 +23,17 @@ Trois choses, dans cet ordre, parce que chacune depend de la precedente.
    Un service qui a deja un conteneur a donc un proprietaire ; cette phase ne
    le touche pas.
 
-   Un echec partiel n'est pas fatal non plus : sur une machine ou la VM tient
-   la carte, tdarr-node-nvenc ne PEUT pas demarrer (le socket
-   nvidia-persistenced n'existe pas), et ce n'est pas une raison de declarer
-   l'installation de la mediatheque en echec. Seul un demarrage ou RIEN ne
-   tourne l'est.
+   A compose failure is never swallowed either. `config`, `ps -a` and `up`
+   all raise ActivationError on a non-zero exit (see compose_services()
+   below) instead of quietly reading as "nothing to create" — a failing
+   `config` used to report the phase done regardless — or "no container
+   exists" — a failing `ps -a` used to make every declared service,
+   including ones the console package's hooks stopped on purpose, look new
+   and get sent through `up -d` again. A failing `up` itself is fatal too,
+   even a partial one (e.g. tdarr-node-nvenc alone failing while the console
+   VM holds the GPU): this phase exits non-zero so the engine retries it,
+   rather than silently declaring the media library installed while one
+   requested service never started.
 
 2. HARVEST THE API KEYS. They do not exist yet at wizard time — each service
    generates its own on first start, inside its config volume's config.xml.
@@ -57,6 +70,9 @@ from atomic_env import write_env
 
 DEPLOY = "/opt/nivuus/media-manager"
 UNIT_DIR = "etc/systemd/system"
+
+DOCKER_REQUIRED_MSG = ("Docker Engine with the compose v2 plugin is required "
+                       "(enable the installer's docker feature)")
 
 # media-manager-cleanup.timer is deliberately NOT armed here (audit H2):
 # media_cleanup.py over-deletes and ranks re-requested titles first, and the
@@ -144,6 +160,33 @@ def arm(root, unit, wants):
     os.symlink(target, link)
 
 
+class ActivationError(RuntimeError):
+    """A prerequisite or a docker compose call failed.
+
+    The phase must stop right there and report non-zero, so the engine can
+    retry it, instead of continuing on a view of the stack it cannot trust.
+    """
+
+
+def ensure_docker():
+    """Verify Docker Engine with the compose v2 plugin, before any compose call.
+
+    Docker is a prerequisite this package declares via apt (docker.io,
+    docker-compose-v2 — nivuus-package.yaml), not something the engine
+    guarantees on its own. Without this check, a missing or incomplete
+    install would only surface as docker compose's own cryptic failure, or
+    an uncaught crash if the docker command does not exist at all.
+    """
+    try:
+        proc = subprocess.run(["docker", "compose", "version"],
+                              capture_output=True, text=True)
+    except OSError as error:
+        raise ActivationError(f"{DOCKER_REQUIRED_MSG}: {error}") from error
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise ActivationError(f"{DOCKER_REQUIRED_MSG}: {detail}")
+
+
 def compose(*args):
     """Docker Compose dans le repertoire de deploiement."""
     return subprocess.run(["docker", "compose", *args], cwd=DEPLOY,
@@ -151,10 +194,19 @@ def compose(*args):
 
 
 def compose_services(*args):
-    """La liste de services rendue par une sous-commande compose. [] si echec."""
+    """The service names one compose subcommand prints, one per line.
+
+    Raises ActivationError on a non-zero exit instead of returning []: a
+    failing `docker compose config` must not read as "nothing to create"
+    (silent success), and a failing `docker compose ps` must not read as "no
+    container exists" — which would send every service compose already
+    knows about, including ones the console package's libvirt hooks
+    deliberately stopped, through `up -d` again.
+    """
     proc = compose(*args)
     if proc.returncode != 0:
-        return []
+        detail = (proc.stderr or "").strip()
+        raise ActivationError(f"docker compose {' '.join(args)}: {detail}")
     return [name for name in (proc.stdout or "").split() if name]
 
 
@@ -190,33 +242,31 @@ def start_units(units):
     return failed
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", required=True)
-    parser.add_argument("--root", default="/")
-    args = parser.parse_args()
-    json.load(sys.stdin)          # le contexte est lu, rien n'en depend ici
-    root = args.root.rstrip("/") or "/"
+def run_phase(root):
+    """The activate phase's body: start the stack, harvest keys, arm timers.
 
-    emit({"event": "progress", "pct": 10, "msg": "Demarrage de la mediatheque"})
-    todo = services_to_start(compose_services("config", "--services"),
-                             compose_services("ps", "-a", "--services"))
-    if todo:
-        proc = compose("up", "-d", *todo)
-        if proc.returncode != 0:
-            tail = (proc.stderr or "").strip().splitlines()
+    Separated from main() so it can be called directly, with a fake
+    subprocess.run, from tests/test_activate_hook.py — the docker
+    prerequisite and compose failure paths (items 3-4) are exercised this
+    way, without a real Docker.
+    """
+    try:
+        ensure_docker()
+        emit({"event": "progress", "pct": 10, "msg": "Demarrage de la mediatheque"})
+        todo = services_to_start(compose_services("config", "--services"),
+                                 compose_services("ps", "-a", "--services"))
+        if todo:
+            proc = compose("up", "-d", *todo)
+            if proc.returncode != 0:
+                detail = (proc.stderr or "").strip()
+                raise ActivationError(
+                    f"docker compose up -d {' '.join(todo)}: {detail}")
+        else:
             emit({"event": "progress", "pct": 40,
-                  "msg": "Demarrage partiel : "
-                         + (tail[-1][:160] if tail else "sans detail")})
-            # Fatal seulement si RIEN ne tourne : un service qui ne peut pas
-            # demarrer (la carte est a la VM) n'invalide pas la mediatheque.
-            if not compose_services("ps", "--services"):
-                print("media-manager activate: aucun service n'a demarre",
-                      file=sys.stderr)
-                return 1
-    else:
-        emit({"event": "progress", "pct": 40,
-              "msg": "Tous les services ont deja un conteneur, rien a creer"})
+                  "msg": "Tous les services ont deja un conteneur, rien a creer"})
+    except ActivationError as exc:
+        print(f"media-manager activate: {exc}", file=sys.stderr)
+        return 1
 
     emit({"event": "progress", "pct": 50, "msg": "Recolte des cles API"})
     deadline = time.time() + HARVEST_TIMEOUT
@@ -254,6 +304,16 @@ def main():
 
     emit({"event": "done"})
     return 0
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--phase", required=True)
+    parser.add_argument("--root", default="/")
+    args = parser.parse_args()
+    json.load(sys.stdin)          # le contexte est lu, rien n'en depend ici
+    root = args.root.rstrip("/") or "/"
+    return run_phase(root)
 
 
 if __name__ == "__main__":
