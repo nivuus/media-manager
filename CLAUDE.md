@@ -33,7 +33,9 @@ Quatre conséquences qui priment sur tout le reste de ce fichier :
   échouerait au démarrage. Le hook `install` crée donc le répertoire (0750,
   PUID/PGID du `.env` effectif, y compris celui d'une installation existante)
   et corrige le propriétaire du répertoire seul, jamais récursivement ni à
-  travers un lien symbolique.
+  travers un lien symbolique. Le changement de propriétaire exige root : lancé
+  sans privilège (la porte d'idempotence de la CI, uid 1001), le hook crée le
+  répertoire, ne le change pas de propriétaire et le dit par un avertissement.
 
 Les chemins ont changé : le compose, les trois scripts de maintenance et les
 assets Tdarr sont sous `stack/`. Le déploiement est `/opt/nivuus/media-manager`

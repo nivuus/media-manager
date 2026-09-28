@@ -18,6 +18,9 @@ through a path. A symlink planted where a data directory belongs is
 refused: this runs as root, and a chown that followed it would hand an
 arbitrary host directory to the service user.
 
+Ownership needs root: when the hook runs unprivileged (euid != 0) the
+directory is still created but not chowned, and one warning names it.
+
 Ownership is fixed on the directory ITSELF, never recursively. Only the
 directory this hook created is known to be ours; what lives inside an
 existing one was written by the service (or restored by the operator) and
@@ -28,6 +31,7 @@ directory this hook creates; an existing one keeps the operator's mode.
 """
 import errno
 import os
+import sys
 
 from safe_copy import DIR_FLAGS, DEST_ROOT_FLAGS, refuse_component
 
@@ -55,7 +59,16 @@ def _ensure_owned_dir(root_fd, dest, name, mode, uid, gid):
             os.fchmod(fd, mode)  # mkdir's mode is masked by the umask
         st = os.fstat(fd)
         if (st.st_uid, st.st_gid) != (uid, gid):
-            os.fchown(fd, uid, gid)
+            if os.geteuid() == 0:
+                os.fchown(fd, uid, gid)
+            else:
+                # Not an error swallowed: a process that is not root cannot
+                # give a directory to another uid, by definition. The engine
+                # installs as root; an unprivileged run (the CI idempotence
+                # gate, a developer checkout) only gets the directory.
+                print(f"media-manager install: warning: {os.path.join(dest, name)}"
+                      f" is not owned by {uid}:{gid}; ownership is set when"
+                      " install runs as root", file=sys.stderr)
     finally:
         os.close(fd)
 

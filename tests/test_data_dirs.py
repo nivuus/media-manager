@@ -11,6 +11,7 @@ user running it.
 
 Run: python3 tests/test_data_dirs.py
 """
+import io
 import os
 import pathlib
 import stat
@@ -65,7 +66,7 @@ with tempfile.TemporaryDirectory() as dest:
     path = os.path.join(dest, "maintainerr")
     os.mkdir(path)
     os.chmod(path, 0o700)
-    with mock.patch("os.fchown") as spy:
+    with mock.patch("os.fchown") as spy, mock.patch("os.geteuid", return_value=0):
         data_dirs.ensure_data_dirs(dest, os.getuid(), os.getgid())
     check("right owner: no chown", spy.call_count, 0)
     check("right owner: mode kept", mode(path), 0o700)
@@ -77,7 +78,7 @@ with tempfile.TemporaryDirectory() as dest:
     os.chmod(path, 0o755)
     inner = os.path.join(path, "maintainerr.sqlite")
     pathlib.Path(inner).write_text("data\n")
-    with mock.patch("os.fchown") as spy:
+    with mock.patch("os.fchown") as spy, mock.patch("os.geteuid", return_value=0):
         data_dirs.ensure_data_dirs(dest, os.getuid() + 1, os.getgid() + 1)
     check("other owner: one chown", spy.call_count, 1)
     check("other owner: chown args", spy.call_args.args[1:],
@@ -89,6 +90,25 @@ with tempfile.TemporaryDirectory() as dest:
         check("other owner: dir chowned", os.stat(path).st_uid, OTHER)
         check("other owner: content not chowned (not recursive)",
               os.stat(inner).st_uid, 0)
+
+# --- Unprivileged (euid != 0): dir created, no chown, one named warning ---
+# Exercised whoever runs the suite, by faking the euid: the shared CI gate runs
+# the hook as uid 1001, where a chown to 1000 can only fail with EPERM.
+with tempfile.TemporaryDirectory() as dest:
+    path = os.path.join(dest, "maintainerr")
+    with mock.patch("os.fchown") as spy, \
+            mock.patch("os.geteuid", return_value=1001), \
+            mock.patch("sys.stderr", new=io.StringIO()) as err:
+        data_dirs.ensure_data_dirs(dest, 1000, 1000)
+        data_dirs.ensure_data_dirs(dest, 1000, 1000)  # existing, still wrong
+    check("unprivileged: dir created", os.path.isdir(path), True)
+    check("unprivileged: mode 0750", mode(path), 0o750)
+    check("unprivileged: no chown attempted", spy.call_count, 0)
+    warnings = err.getvalue().splitlines()
+    check("unprivileged: one warning per run", len(warnings), 2)
+    check("unprivileged: warning names dir and owner",
+          path in warnings[0] and "1000:1000" in warnings[0]
+          and "when install runs as root" in warnings[0], True)
 
 # --- A symlink in place of the dir is refused, its target untouched -------
 with tempfile.TemporaryDirectory() as dest, \
@@ -124,22 +144,20 @@ with tempfile.TemporaryDirectory() as root:
     fake_group_file(root)
     proc = run_hook(root)
     path = pathlib.Path(root) / DEST_REL / "maintainerr"
-    # The success path (exit 0, dir owned 1000:1000) can only run as root, or
-    # as uid/gid 1000 itself: an unprivileged chown to another owner is
-    # refused. Any other user only covers the named-error branch below; the
-    # ownership logic itself is covered for every user by the spy-based
-    # in-process tests further down.
-    if IS_ROOT or (os.getuid(), os.getgid()) == (1000, 1000):
-        check("hook: exit status", proc.returncode, 0)
-        check("hook: dir created", path.is_dir(), True)
-        check("hook: mode 0750", mode(path), 0o750)
+    # As root the dir ends up owned 1000:1000. Unprivileged it is only
+    # created (a chown to another uid is impossible), with one warning unless
+    # the user happens to be 1000:1000 already.
+    check("hook: exit status", proc.returncode, 0)
+    check("hook: dir created", path.is_dir(), True)
+    check("hook: mode 0750", mode(path), 0o750)
+    if IS_ROOT:
         check("hook: owned by the rendered PUID/PGID",
               (path.stat().st_uid, path.stat().st_gid), (1000, 1000))
     else:
-        # Not root and not 1000: the chown is refused, loudly and by name.
-        check("hook (unprivileged): exit status", proc.returncode, 1)
-        check("hook (unprivileged): named error",
-              proc.stderr.startswith("media-manager install: "), True)
+        check("hook (unprivileged): no traceback",
+              "Traceback" in proc.stderr, False)
+        if (os.getuid(), os.getgid()) != (1000, 1000):
+            check("hook (unprivileged): warns", "warning" in proc.stderr, True)
 
 with tempfile.TemporaryDirectory() as root, \
         tempfile.TemporaryDirectory() as victim:
