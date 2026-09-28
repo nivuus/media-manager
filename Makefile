@@ -22,7 +22,7 @@ test:
 	          test_maintenance_units test_arr_api test_queue_policy \
 	          test_downloads_purge test_reset_error_entry test_reset_error_run \
 	          test_reset_error_rows test_reset_error_storage test_reset_error_trust \
-	          test_run_log test_install_hook test_activate_hook; do \
+	          test_update_wanted test_run_log test_install_hook test_activate_hook; do \
 	    echo "--- $$t"; \
 	    $(PYTHON) $(PACKAGE_DIR)/tests/$$t.py || exit 1; \
 	done
