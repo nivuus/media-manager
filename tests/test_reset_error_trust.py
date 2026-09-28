@@ -9,10 +9,11 @@ delete a completed, unimported download: audit C2, through a read that
 succeeded. The timer is Persistent=true, so a missed 06:00 run fires at boot,
 exactly when the queues are cold.
 
-Per instance the run checks the clients (testall passes for a non-empty list
-and health reports neither DownloadClientStatusCheck nor DownloadClientCheck),
-refreshes the queue and waits for the command to complete, reads the queue,
-then checks the clients again. When a step fails the purge is skipped, a failure is recorded and the
+Per instance the run checks the clients (testall passes for a non-empty list,
+a client whose failures are all warnings included, and health reports
+neither DownloadClientStatusCheck nor DownloadClientCheck), refreshes the
+queue and waits for the command to complete, reads the queue, then checks
+the clients again. When a step fails the purge is skipped, a failure is recorded and the
 run exits 1; the rows that were read are still processed, since the rows
 present are real and only absence is unreliable. The refresh is polled on a
 fake clock: no case waits.
@@ -51,6 +52,19 @@ def warned(log_lines, *words):
     """Whether one warning line holds all these words."""
     return any(line.startswith("WARNING") and all(word in line for word in words)
                for line in log_lines)
+
+
+def client_warning(log_lines, *words):
+    """Whether a warning other than the purge skip holds all these words."""
+    return any(line.startswith("WARNING")
+               and not line.startswith("WARNING Downloads purge skipped")
+               and all(word in line for word in words) for line in log_lines)
+
+
+def skipped_for(log_lines, *words):
+    """Whether the purge-skip warning holds all these words."""
+    return any(line.startswith("WARNING Downloads purge skipped")
+               and all(word in line for word in words) for line in log_lines)
 
 
 def radarr_routes():
@@ -174,6 +188,79 @@ for label, answer, reason in UNNAMED:
         check(f"{label}: exit status", code, 1)
         check(f"{label}: purge skipped", (downloads / UNREFERENCED).exists(), True)
         check(f"{label}: reason kept", warned(log, "radarr.test", reason), True)
+
+# --- Warnings alone do not hold a client against the queue (Ruling 15) --------
+# testall answers 400 on any validation failure, a warning included. A
+# failure counts as a warning when the API marks it so, isWarning true or a
+# warning severity; it is then logged, and no failure is recorded.
+TESTALL_WARNED = [
+    {"id": 1, "isValid": True, "validationFailures": []},
+    {"id": 3, "isValid": False, "validationFailures": [
+        {"propertyName": "MovieCategory", "severity": "warning",
+         "errorMessage": "Adding a category specific to Radarr is recommended"}]},
+    {"id": 4, "isValid": False, "validationFailures": [
+        {"propertyName": "", "isWarning": True, "severity": "error",
+         "errorMessage": "Removing torrents that reached their ratio limit is enabled"}]},
+]
+with tempfile.TemporaryDirectory() as tmp, case("warnings only", failures):
+    downloads = make_downloads(tmp)
+    table = radarr_routes()
+    table[("POST", f"{RADARR}/downloadclient/testall")] = reply(400, TESTALL_WARNED)
+    code, api, log = run(table, downloads)
+    check("warnings only: exit status", code, 0)
+    check("warnings only: purge ran", (downloads / UNREFERENCED).exists(), False)
+    check("warnings only: nothing recorded",
+          [line for line in log if line.startswith("ERROR")], [])
+    check("warnings only: queue refreshed",
+          len(commands(api, RADARR, "RefreshMonitoredDownloads")), 1)
+    check("warnings only: warning severity logged",
+          client_warning(log, "radarr.test", "client 3", "Adding a category"), True)
+    check("warnings only: isWarning logged",
+          client_warning(log, "radarr.test", "client 4", "Removing torrents"), True)
+
+# A warning next to an error: the error client alone is held against the queue.
+with tempfile.TemporaryDirectory() as tmp, case("warning and error", failures):
+    downloads = make_downloads(tmp)
+    table = radarr_routes()
+    table[("POST", f"{RADARR}/downloadclient/testall")] = [
+        reply(400, [TESTALL_WARNED[1], {"id": 5, "isValid": False, "validationFailures": [
+            {"propertyName": "Host", "severity": "error",
+             "errorMessage": "Unable to connect to qBittorrent"}]}]),
+        reply(200, TESTALL_PASSED)]
+    code, api, log = run(table, downloads)
+    check("warning and error: exit status", code, 1)
+    check("warning and error: purge skipped", (downloads / UNREFERENCED).exists(), True)
+    check("warning and error: error client named",
+          skipped_for(log, "radarr.test", "client 5", "Unable to connect to qBittorrent"),
+          True)
+    check("warning and error: warning client not held", skipped_for(log, "client 3"), False)
+    check("warning and error: warning logged",
+          client_warning(log, "radarr.test", "client 3", "Adding a category"), True)
+
+# A failure the check cannot read as a warning is an error. Radarr/Sonarr
+# write enums as camelCase strings, so a number is not their warning.
+UNRECOGNISED = [
+    ("no marker", {"propertyName": "", "errorMessage": "Unexpected state"}),
+    ("unknown severity",
+     {"propertyName": "", "errorMessage": "Unexpected state", "severity": "notice"}),
+    ("numeric severity",
+     {"propertyName": "", "errorMessage": "Unexpected state", "severity": 1}),
+    ("isWarning not true",
+     {"propertyName": "", "errorMessage": "Unexpected state", "isWarning": "yes"}),
+    ("not an object", "Unexpected state"),
+]
+for label, failure in UNRECOGNISED:
+    label = f"failure with {label}"
+    with tempfile.TemporaryDirectory() as tmp, case(label, failures):
+        downloads = make_downloads(tmp)
+        table = radarr_routes()
+        table[("POST", f"{RADARR}/downloadclient/testall")] = [
+            reply(400, [{"id": 6, "isValid": False, "validationFailures": [failure]}]),
+            reply(200, TESTALL_PASSED)]
+        code, api, log = run(table, downloads)
+        check(f"{label}: exit status", code, 1)
+        check(f"{label}: purge skipped", (downloads / UNREFERENCED).exists(), True)
+        check(f"{label}: client named", skipped_for(log, "radarr.test", "client 6"), True)
 
 # --- Health reports a client that cannot feed the queue, at one check only ----
 for item in BLOCKING:

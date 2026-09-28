@@ -13,22 +13,31 @@ cold.
 A queue is trusted when every step passes for its instance: the clients
 check, a queue refresh the run waits for, the read itself, and the clients
 check again. The clients check needs both halves. testall must pass for a
-non-empty list of clients: it tests every enabled client there and then,
-but ignores the back-off, so it cannot see a blocked one. Health must report
-neither DownloadClientStatusCheck, clients the back-off blocked (it misses a
-client inside its first-failure grace period), nor DownloadClientCheck, a
-client whose listing fails or no client at all (it reruns on every client
-failure, grace period or not).
+non-empty list of clients: it tests every enabled client there and then
+(for qBittorrent, with the same GetTorrents call the refresh makes), but
+ignores the back-off, so it cannot see a blocked one. A client whose test
+found only warnings passes: a remark on its configuration is logged, not
+held against the queue. Health must report neither
+DownloadClientStatusCheck, clients the back-off blocked (it misses a client
+inside its first-failure grace period), nor DownloadClientCheck, a client
+whose listing fails or no client at all (it reruns on every client failure,
+grace period or not).
 
-Health reruns those checks 5 s after the event that triggers them, so the
-second health read can predate a failure during this run's own refresh; the
-second testall still sees a client that is down by then.
+One failure stays invisible: one confined to the refresh's own listing
+call (GetTorrents for qBittorrent), while the same call just before it, in
+the first testall, and just after it, in the second, succeeds. Health reruns
+its checks only 5 s after the failure is recorded, usually after the second
+read; a first failure does not trip the back-off; and no API exposes a
+client's failure record.
 """
+import logging
 import time
 from http import HTTPStatus
 
 from maintenance.arr_api import ApiError, call_json, get_json, get_json_list, object_list
 from maintenance.queue_actions import fetch_queue
+
+log = logging.getLogger(__name__)
 
 # The health sources saying a download client cannot feed the queue: the
 # checks' class names, which are never localised (their messages are).
@@ -38,6 +47,14 @@ from maintenance.queue_actions import fetch_queue
 BLOCKING_SOURCES = ('DownloadClientStatusCheck', 'DownloadClientCheck')
 
 TESTALL = 'downloadclient/testall'
+TESTALL_ANSWER = f'the answer to POST /api/v3/{TESTALL}'
+# How the JSON of a validation failure can say it is only a warning: an
+# isWarning of true, or FluentValidation's Severity.Warning written as a
+# camelCase string. Radarr/Sonarr (develop) write neither in testall's
+# answer: its failures are serialised as the base ValidationFailure, which
+# drops NzbDroneValidationFailure's isWarning, and their warnings leave
+# Severity at Error. There, a warning still counts as an error.
+WARNING_SEVERITY = 'warning'
 REFRESH_COMMAND = 'RefreshMonitoredDownloads'
 REFRESH_TIMEOUT_SECONDS = 120
 REFRESH_POLL_SECONDS = 2
@@ -48,20 +65,9 @@ FAILED_STATUSES = ('failed', 'aborted', 'cancelled', 'orphaned')
 
 def clients_problem(instance):
     """Why the instance's download clients cannot vouch for its queue; None when they can."""
-    try:
-        results = object_list(call_json(instance, 'POST', TESTALL),
-                              f'the answer to POST /api/v3/{TESTALL}')
-    except ApiError as error:
-        failing = _rejected_clients(error)
-        if failing:
-            return f'download client test failed: {failing}'
-        return f'download client test failed ({error})'
-    if not results:
-        # A disabled client may still hold completed, unimported downloads.
-        return 'no enabled download client feeds the queue'
-    failing = _failing_clients(results)
-    if failing:
-        return f'download client test failed: {failing}'
+    problem = _testall_problem(instance)
+    if problem is not None:
+        return problem
     try:
         health = get_json_list(instance, 'health')
     except ApiError as error:
@@ -72,36 +78,83 @@ def clients_problem(instance):
     return None
 
 
-def _failing_clients(results):
-    """Each client a list of testall results reports failing, with what its test said.
+def _testall_problem(instance):
+    """Why testall says a client cannot feed the queue; None when it says none.
 
-    None when the list reports none.
+    testall answers 400 as soon as one client has a validation failure, a
+    warning included, with the same list of results as its 200. A client is
+    held against the queue only for a failure that is not a warning; each
+    warning is logged instead. Any other status or body fails the check with
+    the error's own message, and so does a 400 that no client's failure
+    explains.
     """
-    failing = []
-    for result in results:
-        if not isinstance(result, dict) or result.get('isValid') is True:
-            continue
-        messages = [failure['errorMessage'] for failure in result.get('validationFailures') or []
-                    if isinstance(failure, dict) and failure.get('errorMessage')]
-        failing.append(f"client {result.get('id')}: {', '.join(messages) or 'no message'}")
-    return '; '.join(failing) or None
+    try:
+        results = object_list(call_json(instance, 'POST', TESTALL), TESTALL_ANSWER)
+        rejection = None
+    except ApiError as error:
+        results = _rejected_results(error)
+        if results is None:
+            return f'download client test failed ({error})'
+        rejection = error
+    if not results and rejection is None:
+        # A disabled client may still hold completed, unimported downloads.
+        return 'no enabled download client feeds the queue'
+    failing, warned = _verdicts(results)
+    for client in warned:
+        log.warning('[%s] download client test warning, not held against the queue: %s',
+                    instance, client)
+    if failing:
+        return f"download client test failed: {'; '.join(failing)}"
+    if rejection is not None and not warned:
+        return f'download client test failed ({rejection})'
+    return None
 
 
-def _rejected_clients(error):
-    """The failing clients a 400 from testall names; None when it names none.
-
-    testall answers 400 as soon as one client fails, with the same list of
-    results as its 200 in the body: that list is what says which client
-    failed and why. Any other error keeps its own message.
-    """
+def _rejected_results(error):
+    """The list of results a 400 from testall carries; None when it carries none."""
     response = error.response
     if response is None or response.status_code != HTTPStatus.BAD_REQUEST:
         return None
     try:
-        results = response.json()
-    except ValueError:  # not JSON: the error's own message is the reason
+        return object_list(response.json(), TESTALL_ANSWER)
+    except (ValueError, ApiError):  # not JSON, or not a list: the error explains itself
         return None
-    return _failing_clients(results) if isinstance(results, list) else None
+
+
+def _verdicts(results):
+    """testall's results as (failing clients, clients with only warnings), described.
+
+    A client passes when isValid is true, or when it has failures and every
+    one of them is a warning. Anything else fails it, including a failure
+    that cannot be read as a warning.
+    """
+    failing, warned = [], []
+    for result in results:
+        if result.get('isValid') is True:
+            continue
+        failures = result.get('validationFailures')
+        failures = failures if isinstance(failures, list) else []
+        errors = [failure for failure in failures if not _is_warning(failure)]
+        client = f"client {result.get('id')}"
+        if failures and not errors:
+            warned.append(f'{client}: {_messages(failures)}')
+        else:
+            failing.append(f'{client}: {_messages(errors)}')
+    return failing, warned
+
+
+def _is_warning(failure):
+    """Whether the JSON of a validation failure marks it as only a warning."""
+    return isinstance(failure, dict) and (
+        failure.get('isWarning') is True or failure.get('severity') == WARNING_SEVERITY)
+
+
+def _messages(failures):
+    """The failures' errorMessage values, joined; 'no message' when none has one."""
+    messages = [failure['errorMessage'] for failure in failures
+                if isinstance(failure, dict) and isinstance(failure.get('errorMessage'), str)
+                and failure['errorMessage']]
+    return ', '.join(messages) or 'no message'
 
 
 def refresh(instance):
