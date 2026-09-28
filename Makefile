@@ -20,8 +20,8 @@ help:
 test:
 	@for t in test_compose_portable test_manifest_contract \
 	          test_maintenance_units test_queue_policy test_downloads_purge \
-	          test_reset_error_run test_run_log test_install_hook \
-	          test_activate_hook; do \
+	          test_reset_error_entry test_reset_error_run test_run_log \
+	          test_install_hook test_activate_hook; do \
 	    echo "--- $$t"; \
 	    $(PYTHON) $(PACKAGE_DIR)/tests/$$t.py || exit 1; \
 	done
