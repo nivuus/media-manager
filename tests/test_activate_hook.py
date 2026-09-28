@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """The activate hook: pure functions, artifacts, and its docker/compose
-failure paths under a fake subprocess.run.
+failure and success paths under a fake subprocess.run.
 
 What is tested without a real Docker: reading an API key from an *arr's
 config.xml, filling the .env, arming timers by symlink, and run_phase()'s
-prerequisite/compose failure paths (docker missing, `config`/`ps`/`up`
-failing) with a fake subprocess.run that dispatches on argv, the same way
-maintenance_fakes.FakeApi dispatches on (method, url). A real `docker compose
-up` succeeding is still left to the production cutover — simulating a
-container actually starting would prove nothing — but a compose subcommand
-FAILING is exactly what this suite must prove, since that used to be
-silently swallowed into "nothing to create" or "no container exists" (see
-ActivationError in activate.py).
+prerequisite/compose paths (docker missing, `config`/`ps`/`up` failing, and
+one full success run) with a fake subprocess.run that dispatches on argv,
+the same way maintenance_fakes.FakeApi dispatches on (method, url). A real
+`docker compose up` against a real Docker daemon is still left to the
+production cutover — simulating a container actually starting would prove
+nothing — but every other path through this section, success included, is
+exactly what this suite must prove: a compose failure used to be silently
+swallowed into "nothing to create" or "no container exists" (see
+ActivationError in activate.py), and the success path is what catches a
+mutant that makes `up` fail unconditionally instead.
 
-The rule that matters for fill_env: it only fills EMPTY values. In
-production the .env already carries the real keys, and overwriting them with
-whatever a freshly started container generated would break the three
-maintenance scripts.
+La regle qui compte : fill_env ne remplit que les valeurs VIDES. En production
+le .env porte deja les cles reelles, et les ecraser par ce qu'un conteneur
+fraichement demarre a genere casserait les trois scripts de maintenance.
 
 Run: python3 tests/test_activate_hook.py
 """

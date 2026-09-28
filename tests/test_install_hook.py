@@ -381,10 +381,7 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     build_git_checkout(pkg)
     fake_group_file(root)
 
-    proc = subprocess.run(
-        [sys.executable, str(pkg / "hooks" / "install.py"),
-         "--phase", "install", "--root", root],
-        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg))
+    proc = run_pkg(pkg, root)
     check("checkout: exit status", proc.returncode, 0)
 
     dest = pathlib.Path(root) / DEST_REL
@@ -405,10 +402,7 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     # No .git anywhere: this is what `git archive HEAD | tar -x` produces.
     fake_group_file(root)
 
-    proc = subprocess.run(
-        [sys.executable, str(pkg / "hooks" / "install.py"),
-         "--phase", "install", "--root", root],
-        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg))
+    proc = run_pkg(pkg, root)
     check("archive export: exit status", proc.returncode, 0)
     dest = pathlib.Path(root) / DEST_REL
     check("archive export: file deployed",
@@ -601,10 +595,7 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     (pkg / ".git").write_text("not a real git repository\n")
     fake_group_file(root)
 
-    proc = subprocess.run(
-        [sys.executable, str(pkg / "hooks" / "install.py"),
-         "--phase", "install", "--root", root],
-        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg))
+    proc = run_pkg(pkg, root)
     check("broken git: exit status", proc.returncode, 1)
     check("broken git: command named", "ls-files" in proc.stderr, True)
     check("broken git: no fallback, nothing deployed at all",
