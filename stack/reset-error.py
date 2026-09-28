@@ -51,6 +51,24 @@ LOCAL_RECOVERABLE_KEYWORDS = [
     'path does not exist',
 ]
 
+# Statuses the download client itself raises against one specific grab.
+# Radarr/Sonarr expose them on `status`, NOT on `trackedDownloadStatus`, which
+# happily stays 'ok'. A real row measured on 2026-09-16:
+#   status=warning / trackedDownloadStatus=ok / trackedDownloadState=downloading
+#   errorMessage="qBittorrent is reporting an error"   (zero byte on disk)
+# Rule 6 only ever tested trackedDownloadStatus, so those rows were invisible to
+# it and only died of old age, three days later.
+CLIENT_ERROR_STATUSES = ('warning', 'failed')
+# 'downloadClientUnavailable' is deliberately NOT in that list: it says OUR
+# client is unreachable, not that the release is bad. Blocklisting on it would
+# throw away perfectly good grabs every time rdtclient restarts.
+
+# A client error can be a blip — the debrid provider answering 502 mid-transfer
+# is a routine event in the rdtclient log. Give it a few hours to clear before
+# writing the release off; still twelve times faster than STUCK_MAX_AGE_HOURS,
+# which is what used to pick these up.
+CLIENT_ERROR_GRACE_HOURS = 6
+
 # A finished download waiting for a manual import is NOT a failure: the bytes
 # are on disk and only the matching step is missing (release name Radarr/Sonarr
 # can't parse, season pack in a single file, "matched by ID" safety guard...).
@@ -222,15 +240,30 @@ def classify_item(item):
             return 'remove_blocklist'
         return 'try_import'
 
-    # 5) Warnings without a clearer signal. Blocklist as well: a warning on a
+    # 5) The download client reports a failure on this grab. Whatever the exact
+    #    wording (it comes from the client, not from Radarr/Sonarr, so rules 1-2
+    #    cannot enumerate it), nothing is being downloaded. Blocklist so the next
+    #    search picks a different release.
+    #
+    #    age is None means the row carries no usable 'added' date. Every rule
+    #    below needs one to fire, so keeping such a row means keeping it forever
+    #    — measured: one row stuck in 'downloading' with no date, invisible to
+    #    every rule. Here the error message is the evidence the date would only
+    #    have confirmed, so act on it straight away.
+    if status in CLIENT_ERROR_STATUSES and item.get('errorMessage'):
+        if age is None or age > CLIENT_ERROR_GRACE_HOURS:
+            return 'remove_blocklist'
+        return 'keep'
+
+    # 6) Warnings without a clearer signal. Blocklist as well: a warning on a
     #    grab we are about to drop means this release did not work out, and an
     #    unblocklisted removal invites Radarr/Sonarr to grab it right back.
     if tracked_status == 'warning':
         return 'remove_blocklist'
 
-    # 6) Anything sitting in the queue for days without importing is dead on
+    # 7) Anything sitting in the queue for days without importing is dead on
     #    the download-client side, whatever its status flags say ('warning/ok/
-    #    downloading' items evaded rules 1-5 for months). Blocklist so the next
+    #    downloading' items evaded rules 1-6 for months). Blocklist so the next
     #    search grabs a different release.
     if age is not None and age > STUCK_MAX_AGE_HOURS:
         return 'remove_blocklist'

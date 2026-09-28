@@ -1,7 +1,8 @@
 import os
+import random
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -23,17 +24,23 @@ RADARR_API_KEY = os.environ.get('RADARR_API_KEY', '')
 # hours), so the searches that mattered found nothing. Instead: search a bounded
 # slice per run, newest first, and rotate through the backlog across days.
 MAX_SEARCH_PER_INSTANCE = 100
+# Anything aired/released within this window is searched on EVERY run: that is
+# where a release still has a real chance of surfacing. The rest of the budget
+# goes to the backlog.
+#
+# Measured on 2026-09-16, Sonarr's 1224 missing episodes: 970 aired more than ten
+# years ago (532 of them one single show), and 6 within the last thirty days. The
+# previous circular rotation spent 100 slots a day walking that backlog in list
+# order, so a brand new episode could wait twelve days for its turn behind
+# decade-old ones that never show up. This inverts the priority without asking
+# the indexers for a single extra request.
+RECENT_WINDOW_DAYS = 30
 # Seconds between instances, so they don't hit the same indexers through
 # Prowlarr at the same second.
 DELAY_BETWEEN_INSTANCES = 120
-# Where the rotation offset is remembered between runs.
-STATE_FILE = os.environ.get(
-    'WANTED_STATE_FILE',
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), '.update_wanted_state')
-)
 
-# Les noms sont conservés tels quels : ils servent de clés dans
-# .update_wanted_state, les renommer remettrait la rotation à zéro.
+# Les noms ne servent plus que d'étiquette de journal depuis que la sélection
+# est sans état : plus de fichier de rotation dont ils seraient les clés.
 instances = [
     {
         'name': 'Sonarr Instance 1',
@@ -61,31 +68,6 @@ def check_api_keys():
         print(f"Error: Missing API keys in environment: {', '.join(missing)}")
         print("Configure them in your .env file or as environment variables.")
         sys.exit(1)
-
-
-def read_state():
-    """Rotation offsets from the previous run, keyed by instance name."""
-    state = {}
-    try:
-        with open(STATE_FILE, encoding='utf-8') as handle:
-            for line in handle:
-                name, _, offset = line.rstrip('\n').partition('\t')
-                if name and offset.isdigit():
-                    state[name] = int(offset)
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        print(f"Etat de rotation illisible ({STATE_FILE}): {e}")
-    return state
-
-
-def write_state(state):
-    try:
-        with open(STATE_FILE, 'w', encoding='utf-8') as handle:
-            for name, offset in sorted(state.items()):
-                handle.write(f"{name}\t{offset}\n")
-    except OSError as e:
-        print(f"Etat de rotation non sauvegarde ({STATE_FILE}): {e}")
 
 
 def fetch_missing(instance):
@@ -116,39 +98,62 @@ def fetch_missing(instance):
     return records
 
 
+def release_date(record, kind):
+    """When the item aired (Sonarr) or was released (Radarr), or None.
+
+    Parsed rather than string-compared: Radarr hands back naive dates for some
+    release types while Sonarr always sends a 'Z' suffix, and comparing those as
+    text silently gets the ordering wrong around the current instant.
+    """
+    if kind == 'sonarr':
+        raw = record.get('airDateUtc')
+    else:
+        raw = (
+            record.get('digitalRelease')
+            or record.get('physicalRelease')
+            or record.get('inCinemas')
+        )
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def is_searchable(record, kind):
     """Skip what cannot possibly be found yet: nothing has been released.
 
     Searching an unreleased title every single day is pure indexer quota burnt
     for a guaranteed zero result.
     """
-    now = datetime.now(timezone.utc).isoformat()
-    if kind == 'sonarr':
-        air_date = record.get('airDateUtc')
-        return bool(air_date) and air_date <= now
-    release = (
-        record.get('digitalRelease')
-        or record.get('physicalRelease')
-        or record.get('inCinemas')
-    )
-    return bool(release) and release <= now
+    released = release_date(record, kind)
+    return released is not None and released <= datetime.now(timezone.utc)
 
 
-def select_slice(records, offset):
-    """Take MAX_SEARCH_PER_INSTANCE items starting at offset, wrapping around.
+def select_batch(records, kind):
+    """The recent ones first, the rest of the budget drawn from the backlog.
 
-    The wrap-around is what eventually gives the older backlog its turn instead
-    of forever re-searching the same head of the list.
+    The backlog is sampled at random rather than walked in rotation: the offset
+    it used to keep was an index into a list whose length and order change on
+    every run (new episodes are inserted at the head, found ones disappear), so
+    it never delivered the even coverage it promised. A draw has the same
+    expected coverage, no state file to keep in sync, and no way to starve an
+    item forever because the list shifted under the offset.
+
+    Returns (recent, sampled) so the caller can log the split.
     """
-    if not records:
-        return [], 0
-    if len(records) <= MAX_SEARCH_PER_INSTANCE:
-        return records, 0
-    offset %= len(records)
-    selected = records[offset:offset + MAX_SEARCH_PER_INSTANCE]
-    if len(selected) < MAX_SEARCH_PER_INSTANCE:
-        selected += records[:MAX_SEARCH_PER_INSTANCE - len(selected)]
-    return selected, (offset + MAX_SEARCH_PER_INSTANCE) % len(records)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RECENT_WINDOW_DAYS)
+    recent, backlog = [], []
+    for record in records:
+        released = release_date(record, kind)
+        (recent if released and released >= cutoff else backlog).append(record)
+
+    recent = recent[:MAX_SEARCH_PER_INSTANCE]
+    budget_left = MAX_SEARCH_PER_INSTANCE - len(recent)
+    sampled = random.sample(backlog, min(budget_left, len(backlog))) if budget_left else []
+    return recent, sampled
 
 
 def trigger_search(instance, records):
@@ -174,7 +179,7 @@ def trigger_search(instance, records):
     return response.status_code
 
 
-def check_and_search(instance, state):
+def check_and_search(instance):
     if instance['type'] not in ('sonarr', 'radarr'):
         print(f"Type inconnu pour l'instance {instance['name']}")
         return
@@ -195,15 +200,16 @@ def check_and_search(instance, state):
         print(f"[{instance['name']}] {len(missing_items)} manquants, aucun encore sorti/diffuse.")
         return
 
-    selected, next_offset = select_slice(searchable, state.get(instance['name'], 0))
+    recent, sampled = select_batch(searchable, instance['type'])
+    selected = recent + sampled
     print(
         f"[{instance['name']}] {len(missing_items)} manquants "
-        f"({skipped} pas encore sortis) -> recherche de {len(selected)}."
+        f"({skipped} pas encore sortis) -> recherche de {len(selected)} "
+        f"({len(recent)} recents <{RECENT_WINDOW_DAYS}j, {len(sampled)} tires du backlog)."
     )
 
     try:
         trigger_search(instance, selected)
-        state[instance['name']] = next_offset
         print(f"[{instance['name']}] Search triggered successfully.")
     except requests.exceptions.RequestException as err:
         print(f"[{instance['name']}] Erreur lors du lancement de la recherche: {err}")
@@ -211,12 +217,10 @@ def check_and_search(instance, state):
 
 def main():
     check_api_keys()
-    state = read_state()
     for index, instance in enumerate(instances):
         if index:
             time.sleep(DELAY_BETWEEN_INSTANCES)
-        check_and_search(instance, state)
-    write_state(state)
+        check_and_search(instance)
 
 
 if __name__ == '__main__':
