@@ -30,8 +30,8 @@ import requests  # noqa: E402
 
 from maintenance_fakes import FakeClock, reply  # noqa: E402
 from reset_error_fixtures import (  # noqa: E402
-    DOWNLOADING, IMPORT_VANISHED, RADARR, REFRESH_ID, SONARR, UNREFERENCED,
-    case, commands, make_downloads, refresh_status, routes, run)
+    DOWNLOADING, IMPORT_VANISHED, RADARR, REFRESH_ID, SONARR, TESTALL_PASSED,
+    UNREFERENCED, case, commands, make_downloads, refresh_status, routes, run)
 
 failures = []
 
@@ -111,13 +111,15 @@ with tempfile.TemporaryDirectory() as tmp, case("all pass", failures):
     check("all pass: one poll every 2 s", clock.sleeps, [2, 2])
 
 # --- testall fails before the refresh: purge skipped, rows processed ---------
+# Where a first check fails, the second one would pass: the queue was read
+# without a refresh, and the first verdict alone has to keep it untrusted.
 with tempfile.TemporaryDirectory() as tmp, case("testall 400", failures):
     downloads = make_downloads(tmp)
     table = radarr_routes()
-    table[("POST", f"{RADARR}/downloadclient/testall")] = reply(400, [{
+    table[("POST", f"{RADARR}/downloadclient/testall")] = [reply(400, [{
         "id": 1, "isValid": False, "validationFailures": [{
             "propertyName": "", "errorMessage": "Unable to connect to RDTClient",
-            "severity": "error"}]}])
+            "severity": "error"}]}]), reply(200, TESTALL_PASSED)]
     code, api, log = run(table, downloads)
     check("testall 400: exit status", code, 1)
     check("testall 400: purge skipped", (downloads / UNREFERENCED).exists(), True)
@@ -131,7 +133,22 @@ with tempfile.TemporaryDirectory() as tmp, case("testall 400", failures):
     check("testall 400: Sonarr rows still processed",
           len(api.made("DELETE", f"{SONARR}/queue/202")), 1)
 
-# --- Health reports a blocked client only after the read ---------------------
+# --- Health reports a blocked client at one check only ------------------------
+with tempfile.TemporaryDirectory() as tmp, case("blocked before the refresh", failures):
+    downloads = make_downloads(tmp)
+    table = radarr_routes()
+    table[("GET", f"{RADARR}/health")] = [reply(200, [BLOCKED]), reply(200, [])]
+    code, api, log = run(table, downloads)
+    check("blocked before the refresh: exit status", code, 1)
+    check("blocked before the refresh: purge skipped",
+          (downloads / UNREFERENCED).exists(), True)
+    check("blocked before the refresh: reason named",
+          warned(log, "radarr.test", "DownloadClientStatusCheck"), True)
+    check("blocked before the refresh: no refresh",
+          commands(api, RADARR, "RefreshMonitoredDownloads"), [])
+    check("blocked before the refresh: rows still processed",
+          len(api.made("DELETE", f"{RADARR}/queue/104")), 1)
+
 with tempfile.TemporaryDirectory() as tmp, case("blocked after the read", failures):
     downloads = make_downloads(tmp)
     table = radarr_routes()
@@ -151,7 +168,8 @@ with tempfile.TemporaryDirectory() as tmp, case("blocked after the read", failur
 with tempfile.TemporaryDirectory() as tmp, case("no client", failures):
     downloads = make_downloads(tmp)
     table = radarr_routes()
-    table[("POST", f"{RADARR}/downloadclient/testall")] = reply(200, [])
+    table[("POST", f"{RADARR}/downloadclient/testall")] = [
+        reply(200, []), reply(200, TESTALL_PASSED)]
     code, api, log = run(table, downloads)
     check("no client: exit status", code, 1)
     check("no client: purge skipped", (downloads / UNREFERENCED).exists(), True)
@@ -216,11 +234,16 @@ UNREADABLE = [
     ("refresh status missing", ("GET", f"/command/{REFRESH_ID[RADARR]}"),
      reply(200, {"id": REFRESH_ID[RADARR]})),
 ]
+# What the clients checks read when all is well: an unreadable first answer
+# is followed by a good one, so that its verdict has to stand on its own.
+CLEAN = {("POST", "/downloadclient/testall"): reply(200, TESTALL_PASSED),
+         ("GET", "/health"): reply(200, [])}
 for label, (method, path), answer in UNREADABLE:
     with tempfile.TemporaryDirectory() as tmp, case(label, failures):
         downloads = make_downloads(tmp)
         table = radarr_routes()
-        table[(method, f"{RADARR}{path}")] = answer
+        table[(method, f"{RADARR}{path}")] = (
+            [answer, CLEAN[(method, path)]] if (method, path) in CLEAN else answer)
         clock = FakeClock()
         code, api, log = run(table, downloads, clock=clock)
         check(f"{label}: exit status", code, 1)
