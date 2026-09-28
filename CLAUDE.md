@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MediaManager is a Docker-based media automation platform for movies and TV shows. It consists of microservices orchestrated via Docker Compose, handling the complete workflow from user requests to media library delivery with AllDebrid downloads, AI-powered subtitles, and transcoding.
+MediaManager is a Docker-based media automation platform for movies and TV shows. It consists of microservices orchestrated via Docker Compose, handling the complete workflow from user requests to media library delivery with AllDebrid downloads, Bazarr-sourced subtitles, and transcoding.
 
 ## Ce dépôt est un package Nivuus
 
@@ -30,7 +30,9 @@ assets Tdarr sont sous `stack/`. Le déploiement est `/opt/nivuus/media-manager`
 
 Les trois lignes de crontab sont remplacées par
 `media-manager-{reset-error,update-wanted,cleanup}.timer`, livrées par le
-package et armées par le hook `activate`. Tests : `make test`.
+package. Seuls `reset-error` et `update-wanted` sont armés par le hook
+`activate` : `cleanup` est livré mais volontairement pas armé — voir
+« Maintenance Scripts » pour ses défauts connus. Tests : `make test`.
 
 ## Essential Commands
 
@@ -52,21 +54,86 @@ docker compose logs -f <service_name>
 docker compose ps
 ```
 
+**Before running any of these against the live deployment, read "Container
+Updates" below** — an explicit `-f docker-compose.yml` silently drops hardware
+transcoding, and a global `up -d`/`restart` can fight the Windows VM's libvirt
+hooks.
+
 ### Maintenance Scripts
 
-**Error Cleanup** (`reset-error.py`):
+**Error Cleanup** (`stack/reset-error.py`, a thin wrapper — a hyphenated file
+name cannot be imported — around `stack/maintenance/reset_error.py`, which
+holds the actual logic and is what the tests import):
 ```bash
 systemctl start media-manager-reset-error.service   # ou : python3 stack/reset-error.py
 ```
-Removes failed downloads from Radarr (port 7878) and Sonarr (port 8989), plus any queue item stuck >72h (removed + blocklisted). Also cleans files older than 24h in the Downloads directory, recreates the 2 category subdirs (radarr, tv-sonarr), and removes entries whose metadata was deleted from TMDb/TheTVDB (file-less only). Lancé quotidiennement à 06:00 par `media-manager-reset-error.timer`, livré par le package.
+Fails closed: before touching anything, a storage guard
+(`stack/maintenance/storage_guard.py`) checks that `DOWNLOADS_DIR` is a real
+directory and that no Radarr/Sonarr root folder reports `accessible=false`;
+if either trips, the run changes nothing at all and exits 1. The 24h
+Downloads purge itself only runs when **every** instance's queue is trusted
+(`stack/maintenance/queue_trust.py`): its download clients must pass `POST
+/api/v3/downloadclient/testall` (a warning does not count as a failure) both
+before and after a forced `RefreshMonitoredDownloads`, and `GET
+/api/v3/health` must report neither `DownloadClientStatusCheck` nor
+`DownloadClientCheck`. Radarr/Sonarr serve the queue from memory — empty
+right after a restart, and missing every download of a client that is down
+or backed off — so purging on an untrusted queue once deleted a completed,
+unimported 36.8 GB download (audit C2). Queue rows that were actually read
+are still processed whether or not their queue was trusted.
 
-A finished download that failed to import (`importPending`/`importBlocked`) is **imported, never deleted**: the script calls the manual-import API for it. Deleting those instead re-opened the exact same grab on every cycle — measured at 64 re-grabs of a single season pack, which is what exhausted the indexer API quotas. Deletion only happens after 72h, and always with blocklisting so the next search picks a different release.
+A finished download that failed to import (`importPending`/`importBlocked`)
+is **imported, never deleted**: the script calls the manual-import API for it
+(120s read timeout — Radarr/Sonarr ffprobe every file in the download).
+Deleting those instead re-opened the exact same grab on every cycle —
+measured at 64 re-grabs of a single season pack, which is what exhausted the
+indexer API quotas. A row whose files vanished from `DOWNLOADS_DIR` is
+removed **without** blocklisting (the release itself was fine); one stuck
+more than 72h, or one Radarr/Sonarr flags as a bad release, is removed
+**with** blocklisting so the next search picks a different one. Exit status
+is 1 on any API/I/O failure — the install hook wires that to
+`OnFailure=systemd-failure-notify@%n.service` through a drop-in, when the
+host provides that unit. Logs go to stdout (the journal) and to
+`/var/log/media-manager/reset-error.log`, rotated at 5 x 5 MiB. Lancé
+quotidiennement à 06:00 par `media-manager-reset-error.timer`, livré par le
+package.
 
-**Missing Content Search** (`update_wanted.py`):
+**Missing Content Search** (`stack/update_wanted.py`, same wrapper pattern,
+logic in `stack/maintenance/update_wanted.py`):
 ```bash
 systemctl start media-manager-update-wanted.service # ou : python3 stack/update_wanted.py
 ```
-Searches for missing episodes/movies across both instances (Radarr + Sonarr) and triggers automatic downloads. Each run searches a bounded slice (`MAX_SEARCH_PER_INSTANCE`, newest first) and rotates through the backlog across days via `.update_wanted_state`; instances are spaced by `DELAY_BETWEEN_INSTANCES`. Unreleased/unaired items are skipped. Searching everything at once made the indexers answer 429 and Prowlarr disabled them for hours.
+Searches for missing episodes/movies across both instances (Radarr + Sonarr)
+and triggers automatic downloads. Each run searches up to
+`MAX_SEARCH_PER_INSTANCE` (100) items per instance: everything
+released/aired within `RECENT_WINDOW_DAYS` (30 days) first, newest first,
+then the rest of the budget from the backlog ordered by `lastSearchTime`
+ascending, never-searched first — deterministic and stateless, there is no
+state file to keep in sync (do not reintroduce `.update_wanted_state`).
+Instances are spaced by `DELAY_BETWEEN_INSTANCES` (120s). Unreleased/unaired
+items are skipped. Exit status is 1 if any instance failed. Searching
+everything at once made the indexers answer 429 and Prowlarr disabled them
+for hours. Logs go to stdout and to
+`/var/log/media-manager/update-wanted.log`, same rotation as above.
+
+**Disk Cleanup** (`stack/media_cleanup.py`): frees space by deleting the
+least-recently-watched movies/series once free space drops under a
+threshold, using Tautulli's watch history. The package still ships
+`media-manager-cleanup.timer`, but `activate` deliberately does not arm it —
+disabled on the reference host since 2026-09-28, pending a Maintainerr pilot
+to replace it. Known defects: it can overshoot the threshold (its post-delete
+check re-reads real disk usage right away, before Radarr/Sonarr's own file
+deletion is necessarily reflected on disk); a re-requested title is ranked
+first for deletion again (Tautulli watch data is keyed by title/year and
+outlives the deletion, so a freshly re-downloaded title inherits its old
+watch date and looks stale immediately); the watch-history match is done on
+the raw title text, so a Plex library using localised titles never lines up
+with Radarr/Sonarr's own title; and it carries on with partial or empty data
+when Tautulli or an `*arr` instance is unreachable, instead of stopping. Run
+it by hand only, and always start with `--dry-run`:
+```bash
+python3 stack/media_cleanup.py --dry-run
+```
 
 ## Architecture
 
@@ -173,7 +240,7 @@ Process (Move to Movies or TV Shows directory)
     ↓
 Transcode (Tdarr :8265-8266, optional optimization)
     ↓
-Subtitles (Bazarr :6767 → Providers + Whisper AI :9000)
+Subtitles (Bazarr :6767 → Providers)
     ↓
 Library (Plex via Tautulli :8181 monitoring)
 ```
@@ -181,7 +248,9 @@ Library (Plex via Tautulli :8181 monitoring)
 ## Key Technical Details
 
 ### API Keys
-All API keys are configured via environment variables in `.env` — see `.env.example` for the full list.
+All API keys are configured via environment variables in `.env`, rendered by
+the `install` hook from `stack/env.template` — see that file for the full
+list.
 
 ### Database Technology
 All services use **SQLite3** with WAL journaling:
@@ -215,28 +284,71 @@ needs reconfiguring. Verify with:
 1. **Prowlarr** → Radarr/Sonarr instances (indexer sync)
 2. **RDTClient + FlareSolverr** → Prowlarr (download client + Cloudflare bypass)
 3. **Radarr/Sonarr** → Bazarr instances (subtitle automation)
-4. **Whisper ASR** → Bazarr (AI subtitle generation fallback)
-5. **Tdarr** → Tdarr-Node (distributed transcoding)
+4. **Tdarr** → Tdarr-Node (distributed transcoding)
 
 ### API Communication
 All services expose REST APIs. Inter-service communication uses Docker DNS (e.g., `http://prowlarr:9696`, `http://radarr:7878`).
+
+## Container Updates
+
+Every service carries a `com.centurylinklabs.watchtower.enable: true` label
+in `docker-compose.yml`, but the updater reading it is **not** Watchtower: it
+is `mqtt-system-agent` (repository `packages/mqtt`, `src/features/updates/`),
+which reuses that label name to pick which containers to update. It replays
+each container's own compose files and recreates one service at a time with
+`--no-deps`; it never starts a container that is currently stopped.
+
+**Compose must be run from `/opt/nivuus/media-manager` without an explicit
+`-f`.** The deployed `.env` sets `COMPOSE_FILE` to merge in
+`docker-compose.qsv.yml` (Intel QSV, `/dev/dri`) whenever the host has
+hardware transcoding. Passing `-f docker-compose.yml` explicitly bypasses
+`COMPOSE_FILE` and silently drops that overlay — that is how Plex lost
+hardware transcoding from 2026-09-04 to 2026-09-28. Verify a container
+actually has the device, rather than trusting the `.env`:
+`docker inspect -f '{{json .HostConfig.Devices}}' <container>`.
+
+**Never run a global `docker compose up -d` or `restart` while the Windows VM
+(package `console`) is running.** Its libvirt hooks deliberately stop
+`tdarr-node` and `tdarr-node-nvenc` for the duration of the game — the CPU
+node to give its cores back to the VM, the NVENC node because a container
+holding the GPU blocks the vfio bind — and a blanket `up`/`restart` starts
+them right back up in the middle of it, with nothing to signal it happened.
+Target one service at a time with `--no-deps` instead, e.g. to recreate
+`tdarr-node` mid-game:
+```bash
+docker compose up --no-start --no-deps tdarr-node
+```
+The console package's own libvirt hooks stop `tdarr-node-nvenc` and
+`tdarr-node` when the VM starts and `start` (never `up`) them again when it
+stops.
 
 ## Modification Guidelines
 
 ### When Editing `docker-compose.yml`:
 - Preserve `depends_on` chains (dependencies are critical)
-- Never remove `labels.com.centurylinklabs.watchtower.enable: true` (auto-updates)
+- Never remove the `com.centurylinklabs.watchtower.enable: true` labels:
+  despite the name, `mqtt-system-agent` uses them to select which containers
+  to auto-update (see "Container Updates")
 - All PUID/PGID and paths are parameterized via `.env`
 - Never split `${MEDIA_ROOT}:/data` back into per-directory mounts on
   Radarr/Sonarr — it silently disables hardlinks (see Critical Path Mappings)
 
 ### When Modifying Python Scripts:
 - All scripts read configuration from environment variables (via `python-dotenv`)
-- `stack/reset-error.py`: Radarr/Sonarr use REST API v3, cleanup deletes files >24h, purges queue items stuck >72h and dead TMDb/TVDB entries. Never delete a completed-but-unimported download: manual-import it (see above)
-- `stack/update_wanted.py`: Uses URLs from environment variables; searches a bounded, rotating slice rather than the whole missing list
-- `stack/media_cleanup.py`: Disk cleanup with Tautulli watch data correlation
-- Instances are declared as lists (`RADARR_INSTANCES`, `instances`) even though
-  there is now one of each: adding an instance back stays a one-line change
+- `stack/maintenance/reset_error.py` (run through the `stack/reset-error.py`
+  wrapper): fails closed on a storage/queue-trust problem before touching
+  anything; never deletes a completed-but-unimported download, it
+  manual-imports it instead (see above)
+- `stack/maintenance/update_wanted.py` (run through the `stack/update_wanted.py`
+  wrapper): deterministic and stateless — do not bring back a state file;
+  searches a bounded slice per run rather than the whole missing list
+- `stack/media_cleanup.py`: disk cleanup with Tautulli watch data correlation;
+  known defects, not armed by `activate` (see "Maintenance Scripts")
+- Radarr/Sonarr instances are still declared as lists —
+  `radarr_instances()`/`sonarr_instances()` in `stack/maintenance/arr_api.py`,
+  `RADARR_INSTANCES`/`SONARR_INSTANCES` in `media_cleanup.py` — even though
+  there is one of each: adding an instance back stays a one-line change,
+  every caller already loops
 
 ### When Troubleshooting:
 1. Verify Prowlarr indexer sync status
@@ -246,11 +358,13 @@ All services expose REST APIs. Inter-service communication uses Docker DNS (e.g.
 
 ## Hardware Acceleration
 
-Services using Intel QSV (`/dev/dri` device):
+Services using Intel QSV (`/dev/dri` device), merged in by
+`docker-compose.qsv.yml` only when the install hook finds it on the host:
 - **Tdarr + Tdarr-Node**: FFmpeg 7 transcoding
-- **Whisper ASR**: AI subtitle generation (faster_whisper engine)
+- **Plex**: hardware-accelerated transcoding
 
-Both require host GPU passthrough to work.
+All three require host GPU passthrough to work; see "Container Updates" for
+why an explicit `-f docker-compose.yml` silently drops this overlay.
 
 ### Tdarr resource limits
 Two failure modes produced `transcodeError` verdicts until 2026-08-24, both
