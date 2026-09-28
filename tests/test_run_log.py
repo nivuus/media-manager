@@ -23,7 +23,7 @@ sys.dont_write_bytecode = True
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "stack"))
 
-from maintenance import reset_error, run_log  # noqa: E402
+from maintenance import run_log  # noqa: E402
 
 failures = []
 
@@ -106,39 +106,67 @@ with tempfile.TemporaryDirectory() as tmp:
           [name for name in (f"reset-error.log.{n}" for n in range(1, 6))
            if not 4.5 * MIB < (directory / name).stat().st_size <= 5 * MIB], [])
 
-# --- A crash reaches the file, traceback included -------------------------------
-def crash(target, run):
-    """reset_error.main() with `target` raising; returns (exit status, file text).
+# --- entry_point(): a crash reaches the file, traceback included ----------
+# Covers the sequence every maintenance script's main() now delegates to
+# (reset_error.main() and update_wanted.main() are both one-line calls into
+# this), so it only needs testing here, once, against the helper itself.
+def crash(run, raise_in_environment=False):
+    """run_log.entry_point() with a crash; returns (exit status, file text).
 
-    `run` stands in for reset_error.run unless `target` is run itself.
+    `run` stands in for the script's run(environ), and raises by itself for
+    the "crash in run" case; raise_in_environment makes load_environment()
+    raise instead, before `run` is ever reached.
     """
     with tempfile.TemporaryDirectory() as tmp:
+        environment = mock.patch(
+            "maintenance.run_log.load_environment",
+            side_effect=RuntimeError("queue exploded") if raise_in_environment else None)
         with mock.patch.dict(os.environ, {"LOGS_DIRECTORY": tmp}), \
                 mock.patch("sys.stdout", new=io.StringIO()), \
-                mock.patch("maintenance.reset_error.load_environment"), \
-                mock.patch("maintenance.reset_error.run", new=run), \
-                mock.patch(target, side_effect=RuntimeError("queue exploded")):
+                environment:
             try:
-                code = reset_error.main()
+                code = run_log.entry_point("crash-test", run)
             except Exception as error:  # a crash fails this case, not the whole file
                 code = f"raised {error!r}"
         tear_down()
-        log_file = pathlib.Path(tmp) / "reset-error.log"
+        log_file = pathlib.Path(tmp) / "crash-test.log"
         return code, log_file.read_text() if log_file.is_file() else ""
 
 
-for label, target in [("run", "maintenance.reset_error.run"),
-                      ("environment", "maintenance.reset_error.load_environment")]:
-    run = mock.Mock()
-    code, text = crash(target, run)
-    check(f"crash in {label}: exit status", code, 1)
-    check(f"crash in {label}: traceback in the file",
-          "Traceback (most recent call last)" in text, True)
-    check(f"crash in {label}: error in the file",
-          "RuntimeError: queue exploded" in text, True)
-    if label == "environment":
-        # Nothing goes on after an unexpected exception.
-        check("crash in environment: no run after it", run.called, False)
+run = mock.Mock(side_effect=RuntimeError("queue exploded"))
+code, text = crash(run)
+check("crash in run: exit status", code, 1)
+check("crash in run: traceback in the file",
+      "Traceback (most recent call last)" in text, True)
+check("crash in run: error in the file",
+      "RuntimeError: queue exploded" in text, True)
+
+run = mock.Mock()
+code, text = crash(run, raise_in_environment=True)
+check("crash in environment: exit status", code, 1)
+check("crash in environment: traceback in the file",
+      "Traceback (most recent call last)" in text, True)
+check("crash in environment: error in the file",
+      "RuntimeError: queue exploded" in text, True)
+# Nothing goes on after an unexpected exception.
+check("crash in environment: no run after it", run.called, False)
+
+# --- entry_point(): SystemExit/KeyboardInterrupt are not caught here -------
+# They already carry their own exit behaviour; catching them would be
+# exactly the silent catch-and-continue this codebase avoids.
+for exception in (SystemExit(3), KeyboardInterrupt()):
+    with tempfile.TemporaryDirectory() as tmp:
+        with mock.patch.dict(os.environ, {"LOGS_DIRECTORY": tmp}), \
+                mock.patch("sys.stdout", new=io.StringIO()), \
+                mock.patch("maintenance.run_log.load_environment"):
+            try:
+                run_log.entry_point("crash-test", mock.Mock(side_effect=exception))
+                raised = None
+            except (SystemExit, KeyboardInterrupt) as error:
+                raised = error
+        tear_down()
+    check(f"{type(exception).__name__} is not caught by entry_point",
+          type(raised), type(exception))
 
 if failures:
     print("\n".join(failures))

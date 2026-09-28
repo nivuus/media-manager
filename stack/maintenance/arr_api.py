@@ -148,3 +148,15 @@ class Failures:
     def record(self, context, error):
         self.count += 1
         log.error('%s: %s', context, error)
+
+
+def exit_status(failures):
+    """1 when `failures` recorded anything this run, 0 otherwise.
+
+    What every maintenance script's run() returns: systemd marks the unit
+    failed on 1, so OnFailure= can alert.
+    """
+    if failures.count:
+        log.error('Run finished with %d failure(s).', failures.count)
+        return 1
+    return 0

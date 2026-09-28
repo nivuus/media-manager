@@ -15,11 +15,10 @@ recorded, the run does what it still safely can, and the exit status is 1
 so that systemd marks the unit failed.
 """
 import logging
-import os
 from datetime import datetime, timezone
 
 from maintenance import run_log
-from maintenance.arr_api import (ApiError, Failures, load_environment,
+from maintenance.arr_api import (ApiError, Failures, exit_status,
                                  missing_api_keys, radarr_instances,
                                  sonarr_instances)
 from maintenance.dead_metadata import remove_dead_entries
@@ -221,22 +220,6 @@ def run(environ):
     return exit_status(failures)
 
 
-def exit_status(failures):
-    """1 when the run recorded any failure, 0 otherwise."""
-    if failures.count:
-        log.error('Run finished with %d failure(s).', failures.count)
-        return 1
-    return 0
-
-
 def main():
-    """The unit's entry point. The log comes first, so that even a crash reaches its file."""
-    run_log.setup('reset-error.log')
-    try:
-        load_environment()
-        return run(os.environ)
-    except Exception:
-        # Unexpected, so nothing is known to be safe: keep the traceback
-        # where it outlives the journal, and stop with the unit failed.
-        log.exception('reset-error crashed')
-        return 1
+    """The unit's entry point: run_log's shared sequence, logging to reset-error.log."""
+    return run_log.entry_point('reset-error', run)

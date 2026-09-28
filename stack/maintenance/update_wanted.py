@@ -12,15 +12,13 @@ it still safely can, and the exit status is 1 so that systemd marks the
 unit failed.
 """
 import logging
-import os
 import time
 from datetime import datetime, timedelta, timezone
 
 from maintenance import run_log
-from maintenance.arr_api import (ApiError, Failures, call, get_json,
-                                 load_environment, missing_api_keys,
-                                 object_list, radarr_instances,
-                                 sonarr_instances)
+from maintenance.arr_api import (ApiError, Failures, call, exit_status,
+                                 get_json, missing_api_keys, object_list,
+                                 radarr_instances, sonarr_instances)
 
 log = logging.getLogger(__name__)
 
@@ -116,6 +114,10 @@ def is_searchable(record, kind, now=None):
 def select_batch(records, kind, now=None):
     """Choose up to MAX_SEARCH_PER_INSTANCE items to search this run.
 
+    Assumes `records` was already filtered to what is_searchable(): a
+    future-dated record would otherwise land in "recent" too, since the only
+    check made here is `released >= cutoff`, not `released <= now`.
+
     The recent items (released/aired within RECENT_WINDOW_DAYS) come first,
     newest first; the rest of the budget is filled from the backlog, ordered
     by lastSearchTime ascending with items never searched first, so every
@@ -144,7 +146,7 @@ def select_batch(records, kind, now=None):
     never_searched = datetime.min.replace(tzinfo=timezone.utc)
     backlog.sort(key=lambda r: (last_search_time(r) or never_searched, r['id']))
     budget_left = MAX_SEARCH_PER_INSTANCE - len(recent)
-    backlog = backlog[:budget_left] if budget_left else []
+    backlog = backlog[:budget_left]
     return recent, backlog
 
 
@@ -210,20 +212,9 @@ def run(environ):
             time.sleep(DELAY_BETWEEN_INSTANCES)
         search_instance(instance, failures, now)
 
-    if failures.count:
-        log.error('Run finished with %d failure(s).', failures.count)
-        return 1
-    return 0
+    return exit_status(failures)
 
 
 def main():
-    """The unit's entry point. The log comes first, so that even a crash reaches its file."""
-    run_log.setup('update-wanted.log')
-    try:
-        load_environment()
-        return run(os.environ)
-    except Exception:
-        # Unexpected, so nothing is known to be safe: keep the traceback
-        # where it outlives the journal, and stop with the unit failed.
-        log.exception('update-wanted crashed')
-        return 1
+    """The unit's entry point: run_log's shared sequence, logging to update-wanted.log."""
+    return run_log.entry_point('update-wanted', run)
