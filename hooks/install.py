@@ -107,17 +107,25 @@ def git_tracked_stack_files(pkg_dir):
 
 def copy_stack(pkg_dir, stack_dir, dest):
     """Deploy stack/ to dest: git-tracked files only in a checkout (rule 4),
-    the whole subtree otherwise."""
+    the whole subtree otherwise. Never a .env, in either mode: a force-added
+    one in a checkout, or one simply sitting in an export's working tree,
+    must never overwrite the live .env — merge_env() has not even run yet
+    at this point.
+    """
     tracked = git_tracked_stack_files(pkg_dir)
     if tracked is None:
-        shutil.copytree(stack_dir, dest, symlinks=True, dirs_exist_ok=True)
+        shutil.copytree(stack_dir, dest, symlinks=True, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(".env"))
         return
     prefix = "stack/"
     for relpath in tracked:
         if not relpath.startswith(prefix):
             continue  # ls-files was scoped to stack/; defensive only
-        source = os.path.join(pkg_dir, relpath)
-        target = os.path.join(dest, relpath[len(prefix):])
+        relpath = relpath[len(prefix):]
+        if os.path.basename(relpath) == ".env":
+            continue
+        source = os.path.join(pkg_dir, prefix + relpath)
+        target = os.path.join(dest, relpath)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         if os.path.islink(source):
             os.symlink(os.readlink(source), target)

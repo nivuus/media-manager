@@ -349,6 +349,14 @@ def make_stack_skeleton(pkg):
     (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
 
 
+def run_pkg(pkg, root):
+    """Run a fake package's own install.py against --root root."""
+    return subprocess.run(
+        [sys.executable, str(pkg / "hooks" / "install.py"),
+         "--phase", "install", "--root", root],
+        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg))
+
+
 def build_git_checkout(pkg):
     make_stack_skeleton(pkg)
 
@@ -405,6 +413,55 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     dest = pathlib.Path(root) / DEST_REL
     check("archive export: file deployed",
           (dest / "docker-compose.yml").is_file(), True)
+
+# --- Never copy a .env, in EITHER mode (fix round 1, item 2) ---------------
+# Neither mode excluded it before: a force-added stack/.env (checkout) or a
+# stack/.env sitting in an export's working tree overwrote the live .env in
+# scratch runs, before merge_env() ever got to read it.
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    (pkg / "stack" / ".env").write_text("RADARR_API_KEY=leaked-force-added\n")
+
+    def git(*args):
+        proc = subprocess.run(["git", *args], cwd=str(pkg),
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+
+    git("init", "-q")
+    git("add", "-f", "stack/env.template", "stack/docker-compose.yml", "stack/.env")
+    git("-c", "user.email=t@t.test", "-c", "user.name=t",
+        "commit", "-q", "-m", "tracked, .env force-added")
+
+    dest = pathlib.Path(root) / DEST_REL
+    dest.mkdir(parents=True)
+    (dest / ".env").write_text("RADARR_API_KEY=real-production-key\n")
+    fake_group_file(root)
+
+    proc = run_pkg(pkg, root)
+    check("force-added .env: exit status", proc.returncode, 0)
+    check("force-added .env: pre-existing key kept",
+          "real-production-key" in (dest / ".env").read_text(), True)
+    check("force-added .env: leaked content never arrives",
+          "leaked-force-added" in (dest / ".env").read_text(), False)
+
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    (pkg / "stack" / ".env").write_text("RADARR_API_KEY=leaked-export\n")
+    # No .git anywhere: an export, exactly like the archive-export case above.
+
+    dest = pathlib.Path(root) / DEST_REL
+    dest.mkdir(parents=True)
+    (dest / ".env").write_text("RADARR_API_KEY=real-production-key\n")
+    fake_group_file(root)
+
+    proc = run_pkg(pkg, root)
+    check("export .env: exit status", proc.returncode, 0)
+    check("export .env: pre-existing key kept",
+          "real-production-key" in (dest / ".env").read_text(), True)
+    check("export .env: leaked content never arrives",
+          "leaked-export" in (dest / ".env").read_text(), False)
 
 # --- A failing git command fails the install loudly, never a fallback -----
 # Ruling 18: git 2.47 on the reference host refuses a repository it does not
