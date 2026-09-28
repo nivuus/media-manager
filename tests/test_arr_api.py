@@ -78,6 +78,22 @@ for label, answer in NOT_A_LIST:
     check(f"{label}: ApiError", type(got), ApiError)
     check(f"{label}: endpoint named", "/api/v3/rootfolder" in str(got), True)
 
+# --- An error status keeps the server's answer ------------------------------
+# A caller that knows what the body of an error says can read it; the other
+# failures have no answer to keep.
+got, _ = read(reply(400, [{"id": 3, "isValid": False}]))
+answer = getattr(got, "response", None)
+check("HTTP 400: answer kept",
+      (answer.status_code, answer.json()) if answer is not None else None,
+      (400, [{"id": 3, "isValid": False}]))
+for label, answer in [
+        ("connection refused",
+         requests.exceptions.ConnectionError("[Errno 111] Connection refused")),
+        ("not JSON", reply(200, raw=b"<html><body>Radarr is starting</body></html>")),
+        ("an object", reply(200, FOLDER))]:
+    got, _ = read(answer)
+    check(f"{label}: no answer kept", getattr(got, "response", "no attribute"), None)
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)

@@ -70,7 +70,16 @@ def missing_api_keys(instances):
 
 
 class ApiError(Exception):
-    """An API call that did not produce a usable answer."""
+    """An API call that did not produce a usable answer.
+
+    `response` is the server's answer when it replied with an error status,
+    for a caller that knows what the body of that error says; None for any
+    other failure.
+    """
+
+    def __init__(self, message, response=None):
+        super().__init__(message)
+        self.response = response
 
 
 def call(instance, method, path, *, params=None, payload=None,
@@ -86,7 +95,10 @@ def call(instance, method, path, *, params=None, payload=None,
             params=params, json=payload, timeout=timeout)
         response.raise_for_status()
     except requests.exceptions.RequestException as error:
-        raise ApiError(f'{method} /api/v3/{path}: {error}') from error
+        # raise_for_status() attaches the answer to the HTTPError it raises;
+        # a network error or a timeout has none.
+        raise ApiError(f'{method} /api/v3/{path}: {error}',
+                       response=error.response) from error
     return response
 
 

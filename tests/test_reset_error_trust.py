@@ -60,6 +60,16 @@ def radarr_routes():
     return table
 
 
+# What testall answers when one of two clients fails: 400, and the same list
+# of results as a 200, the failing one with its validation failures.
+TESTALL_REJECTED = [
+    {"id": 1, "isValid": True, "validationFailures": []},
+    {"id": 3, "isValid": False, "validationFailures": [
+        {"propertyName": "Host", "errorMessage": "Unable to connect to qBittorrent",
+         "attemptedValue": "rdtclient", "severity": "error"},
+        {"propertyName": "", "errorMessage": "Connection refused (rdtclient:6500)",
+         "attemptedValue": None, "severity": "error"}]},
+]
 # What health reports for a download client the provider back-off blocked.
 BLOCKED = {"id": 3, "source": "DownloadClientStatusCheck", "type": "error",
            "message": "All download clients are unavailable due to failures",
@@ -116,14 +126,16 @@ with tempfile.TemporaryDirectory() as tmp, case("all pass", failures):
 with tempfile.TemporaryDirectory() as tmp, case("testall 400", failures):
     downloads = make_downloads(tmp)
     table = radarr_routes()
-    table[("POST", f"{RADARR}/downloadclient/testall")] = [reply(400, [{
-        "id": 1, "isValid": False, "validationFailures": [{
-            "propertyName": "", "errorMessage": "Unable to connect to RDTClient",
-            "severity": "error"}]}]), reply(200, TESTALL_PASSED)]
+    table[("POST", f"{RADARR}/downloadclient/testall")] = [
+        reply(400, TESTALL_REJECTED), reply(200, TESTALL_PASSED)]
     code, api, log = run(table, downloads)
     check("testall 400: exit status", code, 1)
     check("testall 400: purge skipped", (downloads / UNREFERENCED).exists(), True)
-    check("testall 400: reason named", warned(log, "radarr.test", "testall"), True)
+    # The body of the 400 says which client failed and why: the alert has to.
+    check("testall 400: failing client and its messages named",
+          warned(log, "radarr.test", "client 3", "Unable to connect to qBittorrent",
+                 "Connection refused (rdtclient:6500)"), True)
+    check("testall 400: passing client not named", warned(log, "client 1"), False)
     check("testall 400: no refresh",
           commands(api, RADARR, "RefreshMonitoredDownloads"), [])
     check("testall 400: queue still read",
@@ -132,6 +144,26 @@ with tempfile.TemporaryDirectory() as tmp, case("testall 400", failures):
           len(api.made("DELETE", f"{RADARR}/queue/104")), 1)
     check("testall 400: Sonarr rows still processed",
           len(api.made("DELETE", f"{SONARR}/queue/202")), 1)
+
+# A 400 that names no failing client, or another error status, keeps the
+# error's own message as the reason; the check fails all the same.
+UNNAMED = [
+    ("testall 400 not a list", reply(400, {"message": "Bad Request"}), "400 Client Error"),
+    ("testall 400 not JSON", reply(400, raw=b"<html><body>Bad Request</body></html>"),
+     "400 Client Error"),
+    ("testall 400 naming no failing client", reply(400, TESTALL_PASSED), "400 Client Error"),
+    ("testall 500 with results", reply(500, TESTALL_REJECTED), "500 Server Error"),
+]
+for label, answer, reason in UNNAMED:
+    with tempfile.TemporaryDirectory() as tmp, case(label, failures):
+        downloads = make_downloads(tmp)
+        table = radarr_routes()
+        table[("POST", f"{RADARR}/downloadclient/testall")] = [
+            answer, reply(200, TESTALL_PASSED)]
+        code, api, log = run(table, downloads)
+        check(f"{label}: exit status", code, 1)
+        check(f"{label}: purge skipped", (downloads / UNREFERENCED).exists(), True)
+        check(f"{label}: reason kept", warned(log, "radarr.test", reason), True)
 
 # --- Health reports a blocked client at one check only ------------------------
 with tempfile.TemporaryDirectory() as tmp, case("blocked before the refresh", failures):

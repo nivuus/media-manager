@@ -18,6 +18,7 @@ blocked client), and health reporting no blocked client (it misses a client
 inside its first-failure grace period, which testall catches).
 """
 import time
+from http import HTTPStatus
 
 from maintenance.arr_api import ApiError, call_json, get_json, get_json_list, object_list
 from maintenance.queue_actions import fetch_queue
@@ -26,6 +27,7 @@ from maintenance.queue_actions import fetch_queue
 # the check's class name, which is never localised (its message is).
 BLOCKED_CLIENT_SOURCE = 'DownloadClientStatusCheck'
 
+TESTALL = 'downloadclient/testall'
 REFRESH_COMMAND = 'RefreshMonitoredDownloads'
 REFRESH_TIMEOUT_SECONDS = 120
 REFRESH_POLL_SECONDS = 2
@@ -37,16 +39,19 @@ FAILED_STATUSES = ('failed', 'aborted', 'cancelled', 'orphaned')
 def clients_problem(instance):
     """Why the instance's download clients cannot vouch for its queue; None when they can."""
     try:
-        results = object_list(call_json(instance, 'POST', 'downloadclient/testall'),
-                              'the answer to POST /api/v3/downloadclient/testall')
+        results = object_list(call_json(instance, 'POST', TESTALL),
+                              f'the answer to POST /api/v3/{TESTALL}')
     except ApiError as error:
+        failing = _rejected_clients(error)
+        if failing:
+            return f'download client test failed: {failing}'
         return f'download client test failed ({error})'
     if not results:
         # A disabled client may still hold completed, unimported downloads.
         return 'no enabled download client feeds the queue'
-    failing = [result.get('id') for result in results if result.get('isValid') is not True]
+    failing = _failing_clients(results)
     if failing:
-        return f'download client test failed for client id(s) {failing}'
+        return f'download client test failed: {failing}'
     try:
         health = get_json_list(instance, 'health')
     except ApiError as error:
@@ -55,6 +60,38 @@ def clients_problem(instance):
         if item.get('source') == BLOCKED_CLIENT_SOURCE:
             return f"download client blocked ({BLOCKED_CLIENT_SOURCE}: {item.get('message')})"
     return None
+
+
+def _failing_clients(results):
+    """Each client a list of testall results reports failing, with what its test said.
+
+    None when the list reports none.
+    """
+    failing = []
+    for result in results:
+        if not isinstance(result, dict) or result.get('isValid') is True:
+            continue
+        messages = [failure['errorMessage'] for failure in result.get('validationFailures') or []
+                    if isinstance(failure, dict) and failure.get('errorMessage')]
+        failing.append(f"client {result.get('id')}: {', '.join(messages) or 'no message'}")
+    return '; '.join(failing) or None
+
+
+def _rejected_clients(error):
+    """The failing clients a 400 from testall names; None when it names none.
+
+    testall answers 400 as soon as one client fails, with the same list of
+    results as its 200 in the body: that list is what says which client
+    failed and why. Any other error keeps its own message.
+    """
+    response = error.response
+    if response is None or response.status_code != HTTPStatus.BAD_REQUEST:
+        return None
+    try:
+        results = response.json()
+    except ValueError:  # not JSON: the error's own message is the reason
+        return None
+    return _failing_clients(results) if isinstance(results, list) else None
 
 
 def refresh(instance):
