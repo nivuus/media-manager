@@ -17,6 +17,7 @@ import json
 import os
 import pathlib
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -326,6 +327,54 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
           dest.is_symlink(), True)
     check("symlinked deploy dir: content landed in the real target",
           (real_target / "docker-compose.yml").is_file(), True)
+
+# --- N4 (fix round 3): mode/times must be set through the fd, never by
+# name -- only the directory-swap half of item A had a dedicated test ------
+# A regression to os.chmod(tmp_name, ..., dir_fd=dir_fd) /
+# os.utime(tmp_name, ..., dir_fd=dir_fd) would still pass every OTHER test
+# in this file: it compiles, "works" on the happy path, and dir_fd= sounds
+# safe. It is not -- follow_symlinks defaults to True, so it would follow a
+# symlink swapped in for the temp NAME after creation, mutating whatever
+# that symlink points to. A spy on _create_temp_component performs exactly
+# that swap right after the real temp file is created, before _write_file
+# ever gets to set mode/times.
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    git_commit_tracked(pkg, "stack/env.template", "stack/docker-compose.yml")
+
+    # Both modes pinned explicitly, not left to the process umask: an
+    # earlier draft of this test picked 0o640 for the victim without
+    # noticing that THIS host's umask (0o027) already makes a freshly
+    # written source file 0o640 too, which would make the mode assertion
+    # pass by coincidence even under the mutant it exists to catch.
+    (pkg / "stack" / "docker-compose.yml").chmod(0o644)
+    dest = pathlib.Path(root) / DEST_REL
+    dest.mkdir(parents=True)
+    victim = pathlib.Path(root) / "victim.txt"
+    victim.write_text("victim original\n")
+    os.chmod(victim, 0o600)
+    victim_mode_before = stat.S_IMODE(victim.stat().st_mode)
+    victim_mtime_before = victim.stat().st_mtime_ns
+
+    real_create = safe_copy._create_temp_component
+
+    def _create_then_swap(dir_fd, basename):
+        tmp_name, fd = real_create(dir_fd, basename)
+        if basename == "docker-compose.yml":
+            os.unlink(tmp_name, dir_fd=dir_fd)
+            os.symlink(str(victim), tmp_name, dir_fd=dir_fd)
+        return tmp_name, fd
+
+    with mock.patch("safe_copy._create_temp_component", side_effect=_create_then_swap):
+        safe_copy.copy_stack(str(pkg), str(pkg / "stack"), str(dest))
+
+    check("temp-name swap: victim mode unchanged",
+          stat.S_IMODE(victim.stat().st_mode), victim_mode_before)
+    check("temp-name swap: victim mtime unchanged",
+          victim.stat().st_mtime_ns, victim_mtime_before)
+    check("temp-name swap: victim content unchanged",
+          victim.read_text(), "victim original\n")
 
 if failures:
     print("\n".join(failures))
