@@ -19,7 +19,8 @@ from maintenance.arr_api import (ApiError, Failures, load_environment,
                                  sonarr_instances)
 from maintenance.dead_metadata import remove_dead_entries
 from maintenance.downloads_purge import (download_present, names_under,
-                                         protected_names, purge)
+                                         protected_names, purge,
+                                         unmounted_library_reason)
 from maintenance.queue_actions import fetch_queue, manual_import, remove_queue_item
 from maintenance.queue_policy import classify_item, item_age_hours
 
@@ -157,6 +158,8 @@ def run(environ):
     failures = Failures()
     now = datetime.now(timezone.utc)
     downloads_dir = environ.get('DOWNLOADS_DIR', DEFAULT_DOWNLOADS_DIR)
+    library_dirs = [path for path in (environ.get('MOVIES_DIR'), environ.get('TV_DIR'))
+                    if path]
     owner = (int(environ.get('PUID', 1000)), int(environ.get('PGID', 1000)))
 
     # One read per queue: the same rows protect downloads from the purge and
@@ -168,27 +171,38 @@ def run(environ):
         except ApiError as error:
             failures.record(f'[{instance}] queue unreadable', error)
 
-    if len(queues) == len(instances):
-        # Protect files still tied to an active download before purging by age.
-        purge(downloads_dir,
-              protected_names(record for _, records in queues for record in records),
-              owner, failures)
+    # Nothing on disk is judged or touched unless the media disk is evidently
+    # mounted. Unmounted, Docker recreates an empty Downloads directory: every
+    # download would look vanished and be removed from its client, then purged
+    # as an orphan 24 h after the disk comes back.
+    library_problem = unmounted_library_reason(library_dirs)
+    if library_problem:
+        failures.record('Media library looks unmounted (Downloads left untouched, '
+                        'no row removed as files-gone)', library_problem)
+        names = None  # presence unknown for every row
     else:
-        # A queue we could not read may reference any file in Downloads: with
-        # Radarr unreachable for 7 days, purging anyway deleted a completed,
-        # unimported 36.8 GB download (audit C2).
-        log.warning('Downloads purge skipped: a queue could not be read, '
-                    'so the downloads it references are unknown.')
+        if len(queues) == len(instances):
+            # Protect files still tied to an active download before purging.
+            purge(downloads_dir,
+                  protected_names(record for _, records in queues for record in records),
+                  owner, failures)
+        else:
+            # A queue we could not read may reference any file in Downloads:
+            # with Radarr unreachable for 7 days, purging anyway deleted a
+            # completed, unimported 36.8 GB download (audit C2).
+            log.warning('Downloads purge skipped: a queue could not be read, '
+                        'so the downloads it references are unknown.')
 
-    # What is still on disk decides which import-pending rows lost their files.
-    # Listed after the purge, so it shows what the processing will face: a
-    # download folder the purge found empty, and removed, counts as gone.
-    try:
-        names = names_under(downloads_dir)
-    except OSError as error:
-        # Presence unknown: no row is removed as files-gone this run.
-        failures.record(f'Downloads directory {downloads_dir} cannot be listed', error)
-        names = None
+        # What is still on disk decides which import-pending rows lost their
+        # files. Listed after the purge, so it shows what the processing will
+        # face: a download folder the purge found empty, and removed, counts
+        # as gone.
+        try:
+            names = names_under(downloads_dir)
+        except OSError as error:
+            # Presence unknown: no row is removed as files-gone this run.
+            failures.record(f'Downloads directory {downloads_dir} cannot be listed', error)
+            names = None
 
     # The queues that were read are still processed.
     for instance, records in queues:

@@ -137,8 +137,9 @@ STALLED = {
 }
 
 
-def make_downloads(tmp):
-    """A Downloads directory as rdtclient leaves it: every file two days old."""
+def make_downloads(tmp, library=True):
+    """A Downloads directory as rdtclient leaves it, every file two days old,
+    next to a mounted media library unless library=False."""
     root = pathlib.Path(tmp) / "Downloads"
     old = time.time() - 48 * 3600
     for rel in (f"radarr/{MOVIE}/movie.mkv", f"radarr/{PENDING}/movie.mkv",
@@ -148,7 +149,17 @@ def make_downloads(tmp):
         path.write_bytes(b"\0" * 16)
         os.utime(path, (old, old))
     (root / "tv-sonarr").mkdir()
+    if library:
+        make_library(tmp)
     return root
+
+
+def make_library(tmp):
+    """The media library of a mounted disk: one movie, no show yet."""
+    movie = pathlib.Path(tmp) / "Movies" / "Some Movie (2021)" / "Some Movie (2021).mkv"
+    movie.parent.mkdir(parents=True)
+    movie.write_bytes(b"\0" * 16)
+    (pathlib.Path(tmp) / "TV Shows").mkdir()
 
 
 def environment(downloads):
@@ -156,6 +167,8 @@ def environment(downloads):
         "RADARR_URL": "http://radarr.test:7878", "RADARR_API_KEY": "radarr-key",
         "SONARR_URL": "http://sonarr.test:8989", "SONARR_API_KEY": "sonarr-key",
         "DOWNLOADS_DIR": str(downloads),
+        "MOVIES_DIR": str(downloads.parent / "Movies"),
+        "TV_DIR": str(downloads.parent / "TV Shows"),
         # chown to ourselves works as any user; the test must not need root.
         "PUID": str(os.getuid()), "PGID": str(os.getgid()),
     }
@@ -327,6 +340,7 @@ for label, target, error in PURGE_IO:
 # A missing Downloads directory is reported, never created: when the media
 # disk is not mounted, creating it would write into the bare mount point.
 with tempfile.TemporaryDirectory() as tmp, case("missing Downloads"):
+    make_library(tmp)
     missing = pathlib.Path(tmp) / "Downloads"
     code, _, _ = run(routes(), missing)
     check("missing Downloads: exit status", code, 1)
@@ -428,6 +442,7 @@ with tempfile.TemporaryDirectory() as tmp, case("local problem"):
 # Downloads cannot be listed: presence is unknown, nothing is concluded from
 # it, and the failure is recorded.
 with tempfile.TemporaryDirectory() as tmp, case("presence unknown"):
+    make_library(tmp)
     missing = pathlib.Path(tmp) / "Downloads"
     code, api, _ = run(import_routes(), missing)
     check("presence unknown: exit status", code, 1)
@@ -437,6 +452,27 @@ with tempfile.TemporaryDirectory() as tmp, case("presence unknown"):
                for kwargs in api.made("GET", f"{RADARR}/manualimport")]
     check("presence unknown: manual import attempted instead",
           IMPORT_VANISHED["downloadId"] in lookups, True)
+
+# The media library must evidently be mounted before anything on disk is
+# judged. Unmounted, Docker recreates the bind sources as empty directories:
+# every download would look vanished, be removed from its client, and be
+# purged as an orphan 24 h after the disk comes back.
+def empty_library(tmp):
+    for name in ("Movies", "TV Shows"):
+        (pathlib.Path(tmp) / name).mkdir()
+
+
+for label, prepare in (("library missing", None), ("library empty", empty_library)):
+    with tempfile.TemporaryDirectory() as tmp, case(label):
+        downloads = make_downloads(tmp, library=False)
+        if prepare:
+            prepare(tmp)
+        code, api, _ = run(import_routes(), downloads)
+        check(f"{label}: exit status", code, 1)
+        check(f"{label}: no files-gone removal",
+              api.made("DELETE", f"{RADARR}/queue/104"), [])
+        # Nothing on disk is touched in such a run either.
+        check(f"{label}: purge skipped", (downloads / UNREFERENCED).exists(), True)
 
 # Only the listing fails. The purge walks the same tree, so in practice both
 # fail together and the purge's failure alone already sets the exit status;

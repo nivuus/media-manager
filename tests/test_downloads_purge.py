@@ -19,7 +19,8 @@ sys.dont_write_bytecode = True
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "stack"))
 
-from maintenance.downloads_purge import download_present, names_under  # noqa: E402
+from maintenance.downloads_purge import (  # noqa: E402
+    download_present, names_under, unmounted_library_reason)
 
 failures = []
 
@@ -60,6 +61,26 @@ with tempfile.TemporaryDirectory() as tmp:
         failures.append("unlistable directory: nothing raised")
     except OSError:
         pass
+
+# --- Is the media disk there at all? ---------------------------------------
+# Unmounted, Docker recreates the bind sources as empty directories: an empty
+# Downloads directory would then make every download look vanished. The
+# evidence is a library directory (Movies, TV Shows) that holds something.
+with tempfile.TemporaryDirectory() as tmp:
+    movies, shows = pathlib.Path(tmp) / "Movies", pathlib.Path(tmp) / "TV Shows"
+    library = [str(movies), str(shows)]
+    check("library missing: unmounted", unmounted_library_reason(library) is not None, True)
+    movies.mkdir()
+    shows.mkdir()
+    check("library empty: unmounted", unmounted_library_reason(library) is not None, True)
+    (shows / "Some Show").mkdir()
+    check("shows only: mounted", unmounted_library_reason(library), None)
+    shows.joinpath("Some Show").rmdir()
+    shows.rmdir()
+    (movies / "Some Movie (2021)").mkdir()
+    check("movies only, no show directory: mounted", unmounted_library_reason(library), None)
+check("no library directory configured: unmounted",
+      unmounted_library_reason([]) is not None, True)
 
 if failures:
     print("\n".join(failures))

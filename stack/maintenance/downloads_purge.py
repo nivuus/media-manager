@@ -1,5 +1,5 @@
-"""The Downloads directory: what is still in it, what the queues reference,
-and the 24-hour purge."""
+"""The Downloads directory: whether what is in it can be trusted, what is still
+in it, what the queues reference, and the 24-hour purge."""
 import errno
 import logging
 import os
@@ -16,6 +16,27 @@ REQUIRED_SUBDIRS = ['tv-sonarr', 'radarr']
 def entry_name(path):
     """The name a queue path has in its parent directory."""
     return os.path.basename(str(path).rstrip('/'))
+
+
+def unmounted_library_reason(library_dirs):
+    """Why the media library does not look mounted, or None when it does.
+
+    The evidence is one library directory (Movies, TV Shows) that exists and
+    holds at least one entry. Downloads alone proves nothing: with the media
+    disk unmounted, Docker recreates the bind sources as empty directories,
+    and every download would then look vanished.
+    """
+    reasons = []
+    for path in library_dirs:
+        try:
+            with os.scandir(path) as entries:
+                if next(entries, None) is not None:
+                    return None
+        except OSError as error:
+            reasons.append(f'{path}: {error.strerror or error}')
+        else:
+            reasons.append(f'{path} is empty')
+    return '; '.join(reasons) or 'no library directory is configured (MOVIES_DIR, TV_DIR)'
 
 
 def names_under(downloads_dir):
