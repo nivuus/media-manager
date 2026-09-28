@@ -295,16 +295,21 @@ with tempfile.TemporaryDirectory() as root:
 # build.sh exports via `git archive HEAD`, so an export already went through
 # the commit filter and is copied as-is. A checkout has not: copying the
 # whole subtree would ship whatever sits there uncommitted, most often a
-# real .env or a service's runtime config.xml. This fixture is a SEPARATE,
-# self-contained package directory (its own hooks/, systemd/, stack/, .git)
-# so HERE resolves inside it when its own copy of install.py runs, and the
-# real repository is never touched.
-def build_git_checkout(pkg):
+# real .env or a service's runtime config.xml. These fixtures are SEPARATE,
+# self-contained package directories (their own hooks/, systemd/, stack/)
+# so HERE resolves inside them when their own copy of install.py runs, and
+# the real repository is never touched.
+def make_stack_skeleton(pkg):
+    """A minimal fake package directory: hooks/, systemd/, and a tiny stack/."""
     shutil.copytree(REPO / "hooks", pkg / "hooks")
     shutil.copytree(REPO / "systemd", pkg / "systemd")
     (pkg / "stack").mkdir()
     shutil.copy2(REPO / "stack" / "env.template", pkg / "stack" / "env.template")
     (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
+
+
+def build_git_checkout(pkg):
+    make_stack_skeleton(pkg)
 
     def git(*args):
         proc = subprocess.run(["git", *args], cwd=str(pkg),
@@ -347,11 +352,7 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
 # --- A git-archive export (no .git) still deploys the whole tree ----------
 with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
     pkg = pathlib.Path(fake_pkg)
-    shutil.copytree(REPO / "hooks", pkg / "hooks")
-    shutil.copytree(REPO / "systemd", pkg / "systemd")
-    (pkg / "stack").mkdir()
-    shutil.copy2(REPO / "stack" / "env.template", pkg / "stack" / "env.template")
-    (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
+    make_stack_skeleton(pkg)
     # No .git anywhere: this is what `git archive HEAD | tar -x` produces.
     fake_group_file(root)
 
@@ -374,11 +375,7 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
 # `git ls-files` failure without mocking anything.
 with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
     pkg = pathlib.Path(fake_pkg)
-    shutil.copytree(REPO / "hooks", pkg / "hooks")
-    shutil.copytree(REPO / "systemd", pkg / "systemd")
-    (pkg / "stack").mkdir()
-    shutil.copy2(REPO / "stack" / "env.template", pkg / "stack" / "env.template")
-    (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
+    make_stack_skeleton(pkg)
     (pkg / ".git").write_text("not a real git repository\n")
     fake_group_file(root)
 
