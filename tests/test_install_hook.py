@@ -178,6 +178,27 @@ with tempfile.TemporaryDirectory() as root:
     check("commentaire preserve",
           "# fichier de production" in (dest / ".env").read_text(), True)
 
+# --- A reinstall with unchanged effective content touches nothing ---------
+# write_env() (hooks/atomic_env.py) must skip the write entirely when the
+# rendered content already matches: same inode, same mtime. Running install
+# twice with identical answers is the case that exercises it end to end.
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    proc = run(root, ANSWERS)
+    check("reinstall setup: exit status", proc.returncode, 0)
+    env_path = pathlib.Path(root) / DEST_REL / ".env"
+    before = env_path.stat()
+
+    proc = run(root, ANSWERS)
+    check("reinstall: exit status", proc.returncode, 0)
+    after = env_path.stat()
+    check("reinstall: same inode (file untouched)", after.st_ino, before.st_ino)
+    check("reinstall: same mtime (file untouched)",
+          after.st_mtime_ns, before.st_mtime_ns)
+    check("reinstall: no leftover temp file",
+          sorted(p.name for p in (pathlib.Path(root) / DEST_REL).glob(".env*")),
+          [".env"])
+
 # --- Une reponse booleenne mal typee est refusee, pas convertie -----------
 with tempfile.TemporaryDirectory() as root:
     fake_group_file(root)

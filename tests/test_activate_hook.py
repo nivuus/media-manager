@@ -14,10 +14,16 @@ Run: python3 tests/test_activate_hook.py
 """
 import importlib.util
 import pathlib
+import stat
 import sys
 import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
+# activate.py imports its sibling atomic_env.py the same way the deployed
+# stack/ scripts import their sibling maintenance package: by directory,
+# because Python only puts a *directly run* script's own directory on
+# sys.path automatically. exec_module() here is not a direct run.
+sys.path.insert(0, str(REPO / "hooks"))
 
 spec = importlib.util.spec_from_file_location(
     "activate_hook", REPO / "hooks" / "activate.py")
@@ -78,6 +84,32 @@ check("aucune trace de l'ecrasement", "cle-ecrasante" in filled, False)
 check("recolte vide sans effet", "PROWLARR_API_KEY=\n" in filled, True)
 check("commentaire preserve", filled.startswith("# en-tete\n"), True)
 check("ligne hors sujet preservee", "MEDIA_ROOT=/media/data" in filled, True)
+
+# --- The harvest writes the .env atomically, through write_env ------------
+# activate.py must use the same atomic write as install.py (hooks/
+# atomic_env.py): a harvest that changes nothing must leave the file
+# completely untouched, same inode and mtime.
+check("activate.py uses atomic_env's write_env",
+      activate.write_env.__module__, "atomic_env")
+
+with tempfile.TemporaryDirectory() as tmp:
+    env_path = pathlib.Path(tmp) / ".env"
+    env_path.write_text(ENV)
+    before = env_path.stat()
+
+    # A harvest that found nothing new (empty keys) changes nothing.
+    unchanged = activate.fill_env(ENV, {"RADARR_API_KEY": "", "PROWLARR_API_KEY": ""})
+    activate.write_env(str(env_path), unchanged)
+    after = env_path.stat()
+    check("no-op harvest: same inode", after.st_ino, before.st_ino)
+    check("no-op harvest: same mtime", after.st_mtime_ns, before.st_mtime_ns)
+
+    # A harvest that fills a key does change the file, in place (same path),
+    # mode 0600.
+    activate.write_env(str(env_path), filled)
+    check("filled harvest: content written", env_path.read_text(), filled)
+    check("filled harvest: mode 0600",
+          stat.S_IMODE(env_path.stat().st_mode), 0o600)
 
 # --- Ne jamais ressusciter un service arrete par quelqu'un d'autre --------
 # La regression que ce bloc verrouille a ete commise en production le

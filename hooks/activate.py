@@ -52,6 +52,8 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
+from atomic_env import write_env
+
 DEPLOY = "/opt/nivuus/media-manager"
 UNIT_DIR = "etc/systemd/system"
 
@@ -266,9 +268,9 @@ def main():
     env_path = os.path.join(DEPLOY, ".env")
     with open(env_path) as fh:
         filled = fill_env(fh.read(), keys)
-    with open(env_path, "w") as fh:
-        fh.write(filled)
-    os.chmod(env_path, 0o600)
+    # Atomic: a harvest that changes nothing (every key already set) must
+    # not touch the file at all, and mode 0600 is guaranteed by write_env.
+    write_env(env_path, filled)
 
     emit({"event": "progress", "pct": 85, "msg": "Armement des timers"})
     armed = timers_to_arm(env_values(filled))

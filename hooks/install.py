@@ -34,6 +34,8 @@ import os
 import shutil
 import sys
 
+from atomic_env import write_env
+
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STACK = os.path.join(HERE, "stack")
 UNITS_SRC = os.path.join(HERE, "systemd")
@@ -210,10 +212,10 @@ def main():
             rendered = merge_env(fh.read(), rendered)
         emit({"event": "progress", "pct": 70,
               "msg": ".env existant conserve, variables manquantes ajoutees"})
-    with open(env_path, "w") as fh:
-        fh.write(rendered)
-    # 0600 : le jeton de rattachement Plex, et bientot les cles API.
-    os.chmod(env_path, 0o600)
+    # Atomic: the Plex claim token and, soon, the API keys live here. A
+    # reinstall with unchanged values must not even touch the file (same
+    # inode and mtime), and mode 0600 is guaranteed by write_env itself.
+    write_env(env_path, rendered)
 
     emit({"event": "progress", "pct": 85, "msg": "Unites de maintenance posees"})
     unit_dir = os.path.join(root, UNIT_REL_DIR)
