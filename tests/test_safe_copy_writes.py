@@ -166,6 +166,45 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     check("symlinked destination file: victim untouched",
           victim.read_text(), "original victim content\n")
 
+# --- N3 (fix round 3): the pre-flight refuses ANY non-directory ancestor,
+# not just a symlink one, and names the full path + reason -----------------
+# _check_no_symlink_ancestors only checked os.path.islink(): a PLAIN FILE
+# sitting where a directory is expected (no symlink involved at all) passed
+# the pre-flight silently, and only failed later, at write time, inside the
+# copy loop -- by which point docker-compose.yml and env.template (sorting
+# before tdarr/server/marker.txt) were already deployed. The write-time
+# message also said "symlink" even for this non-symlink case, and named
+# only the bare component ("tdarr"), not the full path.
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    (pkg / "stack" / "tdarr" / "server").mkdir(parents=True)
+    (pkg / "stack" / "tdarr" / "server" / "marker.txt").write_text(
+        "expected content\n")
+    git_commit_tracked(pkg, "stack/env.template", "stack/docker-compose.yml",
+                       "stack/tdarr/server/marker.txt")
+
+    dest = pathlib.Path(root) / DEST_REL
+    dest.mkdir(parents=True)
+    (dest / "tdarr").write_text("not a directory at all\n")  # a plain FILE, no symlink
+    fake_group_file(root)
+
+    proc = run_pkg(pkg, root)
+    check("non-directory ancestor: exit status", proc.returncode, 1)
+    check("non-directory ancestor: clean message",
+          proc.stderr.startswith("media-manager install:"), True)
+    check("non-directory ancestor: no traceback", "Traceback" in proc.stderr, False)
+    check("non-directory ancestor: full path named in message",
+          str(dest / "tdarr") in proc.stderr, True)
+    check("non-directory ancestor: reason named, not \"symlink\"",
+          "non-directory" in proc.stderr, True)
+    check("non-directory ancestor: nothing deployed at all (compose)",
+          (dest / "docker-compose.yml").exists(), False)
+    check("non-directory ancestor: nothing deployed at all (env.template)",
+          (dest / "env.template").exists(), False)
+    check("non-directory ancestor: the plain file itself untouched",
+          (dest / "tdarr").read_text(), "not a directory at all\n")
+
 # --- Root writes never follow symlinks: a component swapped in DURING the
 # routine's own write, not before it (fix round 2, item A) -----------------
 # The re-review demonstrated two races: shutil.copystat() and makedirs() /

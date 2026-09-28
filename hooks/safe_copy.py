@@ -128,8 +128,9 @@ def _validate_sources(stack_dir, relpaths):
 
 
 def _check_no_symlink_ancestors(dest_root, target):
-    """Raise if any directory between dest_root and target's parent is
-    already a symlink, at the moment this specific call runs.
+    """Raise if any directory between dest_root and target's parent
+    already exists as something other than a real directory, at the
+    moment this specific call runs.
 
     This is a path-string, lstat-based check: like any check performed on a
     path rather than an open descriptor, something swapped in immediately
@@ -138,6 +139,13 @@ def _check_no_symlink_ancestors(dest_root, target):
     swap made after this check runs is _write_file's own directory-fd walk,
     which re-verifies every component again, independently, right as it
     opens each one — there is no path left to re-resolve there, unlike here.
+
+    Refuses a symlink (checked first, so a dangling one is still caught —
+    os.path.exists() alone would miss it, since it follows the link to a
+    target that is not there) OR any other existing entry that is not a
+    directory (a plain file, most realistically): the latter used to pass
+    this check silently and only fail later, inside the write loop, by
+    which point earlier files in the batch were already deployed.
     """
     rel_dir = os.path.dirname(os.path.relpath(target, dest_root))
     if not rel_dir:
@@ -147,6 +155,9 @@ def _check_no_symlink_ancestors(dest_root, target):
         current = os.path.join(current, part)
         if os.path.islink(current):
             raise RuntimeError(f"refusing to write through a symlink: {current}")
+        if os.path.exists(current) and not os.path.isdir(current):
+            raise RuntimeError(
+                f"refusing to write through a non-directory: {current}")
 
 
 def _validate_destinations(dest_root, relpaths):
@@ -169,18 +180,28 @@ def _open_dir_component(parent_fd, name):
     O_NOFOLLOW + O_DIRECTORY make the kernel itself refuse a symlink or a
     plain file at `name` — observed on this host as ENOTDIR for both cases
     (a symlink-to-directory and a plain file alike), though POSIX leaves
-    room for ELOOP too, so both are treated as the same refusal. Opening by
-    (parent_fd, name) rather than resolving a path string is what makes
-    this uncircumventable: there is no path left for anything to swap
-    underneath between "checked" and "used", because checking IS using.
+    room for ELOOP too. Opening by (parent_fd, name) rather than resolving
+    a path string is what makes this uncircumventable: there is no path
+    left for anything to swap underneath between "checked" and "used",
+    because checking IS using. The raw OSError (ELOOP/ENOTDIR) propagates
+    as-is: only the caller knows the full path so far, and turns it into a
+    message that names it and says why (see _open_dest_dir_fd).
     """
-    try:
-        return os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
-    except OSError as exc:
-        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
-            raise RuntimeError(
-                f"refusing to write through a symlink: {name}") from exc
-        raise
+    return os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
+
+
+def _refuse_component(display_path, exc):
+    """Turn a write-time ELOOP/ENOTDIR into a clear, path-naming refusal.
+
+    The refusal itself already happened — the kernel's own O_NOFOLLOW |
+    O_DIRECTORY check, decided by (dir_fd, name), not by this path string.
+    This lstat is purely to word the message correctly (a symlink vs. some
+    other non-directory); even a change made between the failed open() and
+    this call could only pick the wrong WORD, never the wrong outcome.
+    """
+    reason = "a symlink" if os.path.islink(display_path) else "a non-directory"
+    raise RuntimeError(
+        f"refusing to write through {reason}: {display_path}") from exc
 
 
 def _ensure_dir_component(parent_fd, name):
@@ -220,8 +241,15 @@ def _open_dest_dir_fd(dest_root, rel_dir):
     dir_fd = os.open(dest_root, _DEST_ROOT_FLAGS)
     try:
         if rel_dir:
+            current_path = dest_root
             for part in rel_dir.split(os.sep):
-                next_fd = _ensure_dir_component(dir_fd, part)
+                current_path = os.path.join(current_path, part)
+                try:
+                    next_fd = _ensure_dir_component(dir_fd, part)
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                        _refuse_component(current_path, exc)
+                    raise
                 os.close(dir_fd)
                 dir_fd = next_fd
         return dir_fd
