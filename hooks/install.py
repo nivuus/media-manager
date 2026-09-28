@@ -45,6 +45,7 @@ import shutil
 import sys
 
 from atomic_env import write_env
+from data_dirs import ensure_data_dirs
 from safe_copy import copy_stack
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +54,11 @@ UNITS_SRC = os.path.join(HERE, "systemd")
 
 DEST_REL = "opt/nivuus/media-manager"
 UNIT_REL_DIR = "etc/systemd/system"
+
+# The identity the stack's services run as; rendered into the .env and used
+# to own the data directories of services that do not run as root.
+PUID = 1000
+PGID = 1000
 TEMPLATE_NAME = "env.template"
 
 UNITS = [
@@ -142,6 +148,32 @@ def merge_env(existing, rendered):
         return existing
     tail = "\n# --- Ajoute par le package media-manager ---\n" + "\n".join(added)
     return existing.rstrip("\n") + "\n" + tail + "\n"
+
+
+def env_identity(text):
+    """(uid, gid) that compose will run non-root services as, from a .env text.
+
+    Last assignment wins, as in a dotenv file; one pair of matching quotes is
+    stripped. Anything but plain decimal digits is refused by name: a wrong
+    owner would not fail here, the container would fail to write later.
+    """
+    found = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key, _, value = stripped.partition("=")
+            found[key.strip()] = value.strip()
+    ids = []
+    for key in ("PUID", "PGID"):
+        value = found.get(key, "")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        if not (value.isascii() and value.isdigit()):
+            raise ValueError(
+                f"{key} in .env must be a non-negative integer, got {value!r}"
+                if key in found else f"{key} is missing from .env")
+        ids.append(int(value))
+    return ids[0], ids[1]
 
 
 def render_env(values):
@@ -252,8 +284,8 @@ def install(root, answers):
 
     rendered = render_env({
         "TZ": timezone,
-        "PUID": "1000",
-        "PGID": "1000",
+        "PUID": str(PUID),
+        "PGID": str(PGID),
         "MEDIA_ROOT": media_root,
         "DOWNLOADS_DIR": f"{media_root}/Downloads",
         "MOVIES_DIR": f"{media_root}/Movies",
@@ -272,6 +304,15 @@ def install(root, answers):
             rendered = merge_env(fh.read(), rendered)
         emit({"event": "progress", "pct": 70,
               "msg": ".env existant conserve, variables manquantes ajoutees"})
+    # Docker would create these as root, unwritable by a non-root service.
+    # Owned by the identity the EFFECTIVE .env gives compose (`user:
+    # ${PUID}:${PGID}`): an existing .env keeps its own values through the
+    # merge, so the PUID/PGID constants are only what a fresh .env renders.
+    # Done before write_env: a malformed PUID/PGID or an unusable data dir
+    # fails the install before the .env is touched.
+    uid, gid = env_identity(rendered)
+    ensure_data_dirs(dest, uid, gid)
+
     # Atomic: the Plex claim token and, soon, the API keys live here. A
     # reinstall with unchanged values must not even touch the file (same
     # inode and mtime), and mode 0600 is guaranteed by write_env itself.

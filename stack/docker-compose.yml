@@ -210,6 +210,38 @@ services:
       options:
         max-size: 10m
 
+  # Rule-based media cleanup, replacing stack/media_cleanup.py. Piloted in a
+  # no-action mode first; the operator configures it through its API.
+  # NO authentication on the UI or the API: localhost only, like Seerr.
+  # No PUID/PGID handling in the image, it runs as the compose `user:`, so
+  # ./maintainerr must belong to that user (the install hook creates it so).
+  # No depends_on: it reads Plex/*arr/Tautulli/Seerr at run time and reports
+  # an unreachable one itself; ordering would only delay its own boot.
+  maintainerr:
+    image: ghcr.io/maintainerr/maintainerr:latest
+    user: "${PUID}:${PGID}"
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    environment:
+      - TZ=${TZ}
+    ports:
+      - 127.0.0.1:6246:6246
+    volumes:
+      - ./maintainerr:/opt/data
+    healthcheck:
+      # curl ships in the image (Alpine, `apk add curl`; its own HEALTHCHECK
+      # uses it). No wget in it.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:6246/api/health/live"]
+      start_period: 40s
+      timeout: 5s
+      interval: 30s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
   tdarr:
     image: ghcr.io/haveagitgat/tdarr:latest
     labels:
