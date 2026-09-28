@@ -1,4 +1,5 @@
-"""The Downloads directory: what is still in it, what the queues reference, and the 24-hour purge."""
+"""The Downloads directory: what is still in it, what the queues reference,
+and the 24-hour purge."""
 import errno
 import logging
 import os

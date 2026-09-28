@@ -12,6 +12,9 @@ MANUAL_IMPORT_TIMEOUT = (10, 120)
 
 # Rejections that mean "importing this file would be wrong", not "we failed to
 # identify it". Re-grabbing the same release cannot help, so blocklist it.
+# 'sample' deliberately also matches "Unable to determine if file is a sample":
+# ffprobe could not read the runtime, and force-importing such a file risks a
+# broken file in the library.
 UNIMPORTABLE_REJECTIONS = [
     'not an upgrade',
     'not a sample',

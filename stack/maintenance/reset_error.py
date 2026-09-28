@@ -106,9 +106,10 @@ def process_queue(instance, records, names, now, failures):
                 awaiting += 1
                 log.info('[%s] nothing importable yet, kept: %s', instance, desc)
                 continue
-            # No 'added' date AND nothing to import: a ghost row pointing at
-            # content the download client no longer has. Keeping it would be
-            # forever, since every age-based rule needs a date to fire.
+            # No 'added' date AND nothing importable: a ghost row. Keeping it
+            # would be forever, since every age-based rule needs a date to
+            # fire; remove + blocklist it so the next search picks another
+            # release. (A row whose files are gone never gets here.)
             action = 'remove_blocklist'
 
         if action == 'remove_files_gone':
@@ -180,7 +181,8 @@ def run(environ):
                     'so the downloads it references are unknown.')
 
     # What is still on disk decides which import-pending rows lost their files.
-    # Listed after the purge, so it shows what the processing will face.
+    # Listed after the purge, so it shows what the processing will face: a
+    # download folder the purge found empty, and removed, counts as gone.
     try:
         names = names_under(downloads_dir)
     except OSError as error:
