@@ -119,9 +119,25 @@ CANDIDATES = [{
 }]
 
 
-def make_downloads(tmp):
-    """A Downloads directory as rdtclient leaves it: every file two days old."""
-    root = pathlib.Path(tmp) / "Downloads"
+# The library directories sit next to Downloads, under the media root, as
+# hooks/install.py derives MOVIES_DIR and TV_DIR from MEDIA_ROOT; with the
+# media disk mounted, each holds a title.
+LIBRARY_FILES = {
+    "Movies": "Some Movie (2021)/Some.Movie.2021.MULTi.1080p.WEB.x264-GRP.mkv",
+    "TV Shows": "Some Show/Season 02/Some.Show.S02E01.1080p.WEB.h264-GRP.mkv",
+}
+
+
+def make_downloads(tmp, library=True):
+    """A media root as the stack leaves it; returns its Downloads directory.
+
+    Downloads is as rdtclient leaves it, every file two days old. Next to it
+    are the library directories: each holding one title when `library` is
+    true, both empty otherwise, as Docker recreates them when the media disk
+    is missing at boot.
+    """
+    media = pathlib.Path(tmp)
+    root = media / "Downloads"
     old = time.time() - 48 * 3600
     for rel in (f"radarr/{MOVIE}/movie.mkv", f"radarr/{PENDING}/movie.mkv",
                 UNREFERENCED):
@@ -130,14 +146,22 @@ def make_downloads(tmp):
         path.write_bytes(b"\0" * 16)
         os.utime(path, (old, old))
     (root / "tv-sonarr").mkdir()
+    for directory, rel in LIBRARY_FILES.items():
+        (media / directory).mkdir()
+        if library:
+            title = media / directory / rel
+            title.parent.mkdir(parents=True)
+            title.write_bytes(b"\0" * 16)
     return root
 
 
 def environment(downloads):
+    media = pathlib.Path(downloads).parent
     return {
         "RADARR_URL": "http://radarr.test:7878", "RADARR_API_KEY": "radarr-key",
         "SONARR_URL": "http://sonarr.test:8989", "SONARR_API_KEY": "sonarr-key",
         "DOWNLOADS_DIR": str(downloads),
+        "MOVIES_DIR": str(media / "Movies"), "TV_DIR": str(media / "TV Shows"),
         # chown to ourselves works as any user; the test must not need root.
         "PUID": str(os.getuid()), "PGID": str(os.getgid()),
     }
@@ -192,11 +216,12 @@ def import_routes():
     return table
 
 
-def run(table, downloads, patches=(), clock=None):
+def run(table, downloads, patches=(), clock=None, environ=None):
     """One reset-error run; returns (exit status, fake API, log lines).
 
-    The queue refresh is polled on `clock`, a fresh FakeClock by default: no
-    case ever sleeps for real.
+    The run sees environment(downloads) unless `environ` is given. The queue
+    refresh is polled on `clock`, a fresh FakeClock by default: no case ever
+    sleeps for real.
     """
     api = FakeApi(table)
     CAPTURE.lines.clear()
@@ -207,7 +232,7 @@ def run(table, downloads, patches=(), clock=None):
         for target, error in patches:
             stack.enter_context(mock.patch(target, side_effect=error))
         try:
-            code = reset_error.run(environment(downloads))
+            code = reset_error.run(environment(downloads) if environ is None else environ)
         except Exception as error:  # a crash fails this case, not the whole file
             code = f"raised {error!r}"
     return code, api, list(CAPTURE.lines)

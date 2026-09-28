@@ -6,13 +6,14 @@ module is what the tests import.
 
 The run fails closed. Before any action it checks that the storage is
 evidently there (storage_guard.py), and changes nothing at all when it is
-not. The queues are what protects a download from the purge, so the purge
-only happens when every queue was read in full, right after a refresh, and
-its download clients passed their test and were not blocked both before
-and after the read (queue_trust.py): a queue lists nothing for a client
-that is down, blocked or not yet refreshed. Any API or I/O failure is
-recorded, the run does what it still safely can, and the exit status is 1
-so that systemd marks the unit failed.
+not; and it only removes a row because its download left Downloads while
+the library shows the media disk is mounted. The queues are what protects
+a download from the purge, so the purge only happens when every queue was
+read in full, right after a refresh, and its download clients passed their
+test and were not blocked both before and after the read (queue_trust.py):
+a queue lists nothing for a client that is down, blocked or not yet
+refreshed. Any API or I/O failure is recorded, the run does what it still
+safely can, and the exit status is 1 so that systemd marks the unit failed.
 """
 import logging
 from datetime import datetime, timezone
@@ -27,7 +28,7 @@ from maintenance.downloads_purge import (download_present, names_under,
 from maintenance.queue_actions import manual_import, remove_queue_item
 from maintenance.queue_policy import classify_item, item_age_hours
 from maintenance.queue_trust import read_queue
-from maintenance.storage_guard import storage_problems
+from maintenance.storage_guard import library_doubt, storage_problems
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +152,33 @@ def process_queue(instance, records, names, now, failures):
     log.info(summary)
 
 
+def downloads_listing(environ, downloads_dir, failures):
+    """The Downloads listing files-gone is decided on, or None when it proves nothing.
+
+    None means presence is unknown: no row is removed as files-gone, and
+    every other rule applies as usual. With the media disk missing at boot,
+    Docker recreates both the library directories and DOWNLOADS_DIR empty,
+    and the storage guard passes, so the listing is only made while a
+    library directory holds something (storage_guard.library_doubt); a
+    fresh install's empty library only delays files-gone, hence a warning.
+    A directory that cannot be listed is a failure.
+    """
+    try:
+        doubt = library_doubt(environ)
+    except OSError as error:
+        failures.record('Library cannot be listed, no row removed as files-gone', error)
+        return None
+    if doubt is not None:
+        log.warning('No row removed as files-gone this run, the library holds '
+                    'nothing to show the media disk is mounted: %s', doubt)
+        return None
+    try:
+        return names_under(downloads_dir)
+    except OSError as error:
+        failures.record(f'Downloads directory {downloads_dir} cannot be listed', error)
+        return None
+
+
 def run(environ):
     """One clean-up run against the instances configured in `environ`."""
     instances = radarr_instances(environ) + sonarr_instances(environ)
@@ -205,12 +233,7 @@ def run(environ):
     # What is still on disk decides which import-pending rows lost their files.
     # Listed after the purge, so it shows what the processing will face: a
     # download folder the purge found empty, and removed, counts as gone.
-    try:
-        names = names_under(downloads_dir)
-    except OSError as error:
-        # Presence unknown: no row is removed as files-gone this run.
-        failures.record(f'Downloads directory {downloads_dir} cannot be listed', error)
-        names = None
+    names = downloads_listing(environ, downloads_dir, failures)
 
     # The queues that were read are still processed, trusted or not: the rows
     # present are real, only absence is unreliable.

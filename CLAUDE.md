@@ -94,7 +94,13 @@ measured at 64 re-grabs of a single season pack, which is what exhausted the
 indexer API quotas. A row whose files vanished from `DOWNLOADS_DIR` is
 removed **without** blocklisting (the release itself was fine); one stuck
 more than 72h, or one Radarr/Sonarr flags as a bad release, is removed
-**with** blocklisting so the next search picks a different one. Exit status
+**with** blocklisting so the next search picks a different one. Files-gone is
+only concluded while `MOVIES_DIR` or `TV_DIR` holds something
+(`storage_guard.library_doubt`): with the media disk missing at boot, Docker
+recreates every bind source as an empty directory, so the root folders report
+accessible and the storage guard passes; an empty library then withholds
+files-gone for the run, with a warning, not a failure — a fresh install only
+waits for its first import. Exit status
 is 1 on any API/I/O failure — the install hook wires that to
 `OnFailure=systemd-failure-notify@%n.service` through a drop-in, when the
 host provides that unit. Logs go to stdout (the journal) and to
