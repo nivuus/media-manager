@@ -95,6 +95,8 @@ check("maintainerr: not in the QSV overlay",
       "maintainerr" in qsv["services"], False)
 check("maintainerr: data volume", maintainerr.get("volumes"),
       ["./maintainerr:/opt/data"])
+check("maintainerr: reaches host-network Plex through host-gateway",
+      maintainerr.get("extra_hosts"), ["host.docker.internal:host-gateway"])
 check("maintainerr: probes the liveness endpoint with curl",
       maintainerr["healthcheck"]["test"],
       ["CMD", "curl", "-fsS", "http://127.0.0.1:6246/api/health/live"])
