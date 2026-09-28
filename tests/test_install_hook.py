@@ -218,6 +218,76 @@ with tempfile.TemporaryDirectory() as root:
     check("VIDEO_GID par defaut", values["VIDEO_GID"], "44")
     check("RENDER_GID par defaut", values["RENDER_GID"], "105")
 
+# --- OnFailure= drop-in: only when the host has systemd-failure-notify@ ----
+# The three deployed media-manager-*.service units carried a hand-added
+# OnFailure=systemd-failure-notify@%n.service line on the reference host,
+# added by hand because a reinstall drops it. systemd-failure-notify@.service
+# belongs to the host, not to this package, so the drop-in must only
+# reference it when it actually exists there.
+FAILURE_NOTIFY_UNIT = "systemd-failure-notify@.service"
+DROPIN_NAME = "10-on-failure.conf"
+DROPIN_CONTENT = "[Unit]\nOnFailure=systemd-failure-notify@%n.service\n"
+MAINTENANCE_SERVICES = (
+    "media-manager-reset-error.service",
+    "media-manager-update-wanted.service",
+    "media-manager-cleanup.service",
+)
+
+
+def dropin_path(root, unit):
+    return pathlib.Path(root) / "etc/systemd/system" / f"{unit}.d" / DROPIN_NAME
+
+
+def fake_failure_notify(root):
+    path = pathlib.Path(root) / "etc/systemd/system" / FAILURE_NOTIFY_UNIT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[Unit]\nDescription=host-provided\n")
+
+
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    fake_failure_notify(root)
+    proc = run(root, ANSWERS)
+    check("failure-notify present: exit status", proc.returncode, 0)
+    for unit in MAINTENANCE_SERVICES:
+        path = dropin_path(root, unit)
+        check(f"failure-notify present: drop-in written for {unit}",
+              path.is_file(), True)
+        check(f"failure-notify present: drop-in content for {unit}",
+              path.read_text(), DROPIN_CONTENT)
+    # Only the three .service units get a drop-in, never the .timer units.
+    for unit in ("media-manager-reset-error.timer",
+                "media-manager-update-wanted.timer",
+                "media-manager-cleanup.timer"):
+        check(f"failure-notify present: no drop-in for {unit}",
+              dropin_path(root, unit).exists(), False)
+
+# --- No systemd-failure-notify@ on the host: no drop-in at all -------------
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    proc = run(root, ANSWERS)
+    check("failure-notify absent: exit status", proc.returncode, 0)
+    for unit in MAINTENANCE_SERVICES:
+        check(f"failure-notify absent: no drop-in for {unit}",
+              dropin_path(root, unit).exists(), False)
+
+# --- A previous install's drop-in is removed once the host unit is gone ---
+# "and nothing else": a sibling drop-in an operator added by hand in the same
+# directory must survive.
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    stale = dropin_path(root, "media-manager-reset-error.service")
+    stale.parent.mkdir(parents=True)
+    stale.write_text(DROPIN_CONTENT)
+    sibling = stale.parent / "20-operator-added.conf"
+    sibling.write_text("# kept\n")
+
+    proc = run(root, ANSWERS)
+    check("failure-notify removed: exit status", proc.returncode, 0)
+    check("failure-notify removed: stale drop-in gone", stale.exists(), False)
+    check("failure-notify removed: sibling file untouched",
+          sibling.read_text(), "# kept\n")
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)

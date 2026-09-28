@@ -50,6 +50,16 @@ UNITS = [
     "media-manager-cleanup.service", "media-manager-cleanup.timer",
 ]
 
+# systemd-failure-notify@.service belongs to the host, not to this package
+# (see CLAUDE.md): it is what actually sends an alert on a failed run, but
+# this package must never declare a hard dependency on a unit it does not
+# ship. A drop-in wires each maintenance service to it, ONLY when the host
+# has it — a reinstall must not resurrect a dangling OnFailure= after an
+# operator removes that host unit.
+FAILURE_NOTIFY_UNIT = "systemd-failure-notify@.service"
+FAILURE_DROPIN_NAME = "10-on-failure.conf"
+FAILURE_DROPIN_CONTENT = "[Unit]\nOnFailure=systemd-failure-notify@%n.service\n"
+
 # Valeurs Debian par defaut, utilisees seulement si /etc/group est illisible.
 DEFAULT_GIDS = {"video": 44, "render": 105}
 
@@ -139,6 +149,28 @@ def place_unit(name, dest_dir):
     os.chmod(dest, 0o644)
 
 
+def sync_failure_dropins(root):
+    """Write or drop the OnFailure= alert drop-in for each maintenance service.
+
+    Only the three .service units get one (cleanup included: an operator who
+    runs it by hand still wants the alert) — never the .timer units, which
+    never fail themselves. When the host has no systemd-failure-notify@, any
+    drop-in a previous install left behind is removed, and nothing else in
+    that directory is touched (an operator may have added their own drop-in
+    next to it).
+    """
+    unit_dir = os.path.join(root, UNIT_REL_DIR)
+    notify_present = os.path.isfile(os.path.join(unit_dir, FAILURE_NOTIFY_UNIT))
+    for unit in (u for u in UNITS if u.endswith(".service")):
+        dropin = os.path.join(unit_dir, f"{unit}.d", FAILURE_DROPIN_NAME)
+        if notify_present:
+            os.makedirs(os.path.dirname(dropin), exist_ok=True)
+            with open(dropin, "w") as fh:
+                fh.write(FAILURE_DROPIN_CONTENT)
+        elif os.path.exists(dropin):
+            os.remove(dropin)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", required=True)
@@ -221,6 +253,7 @@ def main():
     unit_dir = os.path.join(root, UNIT_REL_DIR)
     for unit in UNITS:
         place_unit(unit, unit_dir)
+    sync_failure_dropins(root)
 
     emit({"event": "done"})
     return 0
