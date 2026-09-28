@@ -8,21 +8,20 @@ SEPARATE, self-contained fake package directory (its own hooks/, systemd/,
 stack/) so HERE resolves inside it when its own copy of install.py runs, and
 the real repository is never touched.
 
-Three concerns, all in copy_stack(): a checkout deploys only what git
+Two concerns here, both in copy_stack(): a checkout deploys only what git
 tracks (rule 4 of install.py's docstring) while a git-archive export (no
-.git) deploys the whole tree; a .env is never copied in either mode; and
-every write is hardened against a symlink planted by a container with a
-read-write bind mount under the deploy tree (Tdarr's
-tdarr/server/Tdarr/Plugins/..., see stack/docker-compose.yml) — checked on
-both the source and the destination side.
+.git) deploys the whole tree; and a .env is never copied in either mode.
+The write path's own symlink hardening (a container with a read-write bind
+mount under the deploy tree, such as Tdarr's tdarr/server/Tdarr/Plugins/...,
+planting a symlink ahead of a reinstall) is covered separately, in
+tests/test_safe_copy_writes.py — that file kept this one under the
+500-line limit once fix round 3 added more of it.
 
 Run: python3 tests/test_safe_copy.py
 """
 import json
-import os
 import pathlib
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -263,172 +262,6 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     check("git binary missing: no traceback", "Traceback" in proc.stderr, False)
     check("git binary missing: nothing deployed",
           (pathlib.Path(root) / DEST_REL).exists(), False)
-
-# --- Root writes never follow symlinks: a hijacked ancestor directory -----
-# (fix round 1, item 7). A container with a read-write bind mount under the
-# deploy tree (Tdarr's tdarr/server/Tdarr/Plugins/..., see
-# stack/docker-compose.yml) could plant a symlink ahead of a reinstall,
-# redirecting a root-run write anywhere else on the host.
-with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
-    pkg = pathlib.Path(fake_pkg)
-    make_stack_skeleton(pkg)
-    (pkg / "stack" / "tdarr" / "server").mkdir(parents=True)
-    (pkg / "stack" / "tdarr" / "server" / "marker.txt").write_text(
-        "expected content\n")
-    git_commit_tracked(pkg, "stack/env.template", "stack/docker-compose.yml",
-                       "stack/tdarr/server/marker.txt")
-
-    dest = pathlib.Path(root) / DEST_REL
-    (dest / "tdarr").mkdir(parents=True)
-    victim = pathlib.Path(root) / "victim"
-    victim.mkdir()
-    (dest / "tdarr" / "server").symlink_to(victim)
-    fake_group_file(root)
-
-    proc = run_pkg(pkg, root)
-    check("symlinked ancestor: exit status", proc.returncode, 1)
-    check("symlinked ancestor: clean message",
-          proc.stderr.startswith("media-manager install:"), True)
-    check("symlinked ancestor: no traceback", "Traceback" in proc.stderr, False)
-    check("symlinked ancestor: victim untouched",
-          sorted(p.name for p in victim.iterdir()), [])
-    check("symlinked ancestor: symlink itself untouched",
-          (dest / "tdarr" / "server").is_symlink(), True)
-    # fix round 2, item B: docker-compose.yml and env.template sort BEFORE
-    # tdarr/server/marker.txt (d < e < t), so a per-file ancestor check run
-    # inside the copy loop lets both land before the symlinked one is even
-    # reached — a partial deploy, demonstrated by the re-review. The
-    # pre-flight must refuse the whole batch before writing anything.
-    check("symlinked ancestor: nothing else deployed either (compose)",
-          (dest / "docker-compose.yml").exists(), False)
-    check("symlinked ancestor: nothing else deployed either (env.template)",
-          (dest / "env.template").exists(), False)
-
-# --- Root writes never follow symlinks: a hijacked destination file -------
-# The final path component is replaced (os.replace), never opened and
-# written through: the symlink's target must survive exactly as it was.
-with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
-    pkg = pathlib.Path(fake_pkg)
-    make_stack_skeleton(pkg)
-    (pkg / "stack" / "tdarr" / "server").mkdir(parents=True)
-    (pkg / "stack" / "tdarr" / "server" / "marker.txt").write_text(
-        "expected content\n")
-    git_commit_tracked(pkg, "stack/env.template", "stack/docker-compose.yml",
-                       "stack/tdarr/server/marker.txt")
-
-    dest = pathlib.Path(root) / DEST_REL
-    (dest / "tdarr" / "server").mkdir(parents=True)
-    victim = pathlib.Path(root) / "victim.txt"
-    victim.write_text("original victim content\n")
-    (dest / "tdarr" / "server" / "marker.txt").symlink_to(victim)
-    fake_group_file(root)
-
-    proc = run_pkg(pkg, root)
-    check("symlinked destination file: exit status", proc.returncode, 0)
-    check("symlinked destination file: replaced with a regular file",
-          (dest / "tdarr" / "server" / "marker.txt").is_symlink(), False)
-    check("symlinked destination file: tracked content written",
-          (dest / "tdarr" / "server" / "marker.txt").read_text(),
-          "expected content\n")
-    check("symlinked destination file: victim untouched",
-          victim.read_text(), "original victim content\n")
-
-# --- Root writes never follow symlinks: a component swapped in DURING the
-# routine's own write, not before it (fix round 2, item A) -----------------
-# The re-review demonstrated two races: shutil.copystat() and makedirs() /
-# mkstemp() / os.replace() all take a path and re-resolve it, so a container
-# watching its writable directory can swap a symlink in between the ancestor
-# check and the actual write. Reproduced deterministically here (no real
-# concurrency needed): a transparent spy on _ensure_dir_component performs
-# the swap itself, then calls straight through to the real function, right
-# as the routine is about to open that exact component — the narrowest
-# possible window. The fix must refuse this at that exact moment (the open()
-# call itself, via O_NOFOLLOW | O_DIRECTORY), not merely at some earlier
-# check that this swap happens after.
-with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
-    pkg = pathlib.Path(fake_pkg)
-    make_stack_skeleton(pkg)
-    (pkg / "stack" / "tdarr" / "server").mkdir(parents=True)
-    (pkg / "stack" / "tdarr" / "server" / "marker.txt").write_text(
-        "expected content\n")
-    git_commit_tracked(pkg, "stack/env.template", "stack/docker-compose.yml",
-                       "stack/tdarr/server/marker.txt")
-
-    dest = pathlib.Path(root) / DEST_REL
-    (dest / "tdarr" / "server").mkdir(parents=True)  # a real dir, like after a prior install
-    victim = pathlib.Path(root) / "victim"
-    victim.mkdir()
-
-    real_ensure = safe_copy._ensure_dir_component
-    swapped = []
-
-    def _swap_then_ensure(parent_fd, name):
-        if name == "server" and not swapped:
-            swapped.append(True)
-            (dest / "tdarr" / "server").rmdir()
-            (dest / "tdarr" / "server").symlink_to(victim)
-        return real_ensure(parent_fd, name)
-
-    raised = None
-    with mock.patch("safe_copy._ensure_dir_component", side_effect=_swap_then_ensure):
-        try:
-            safe_copy.copy_stack(str(pkg), str(pkg / "stack"), str(dest))
-        except RuntimeError as exc:
-            raised = exc
-
-    check("mid-routine swap: refused", raised is not None, True)
-    check("mid-routine swap: victim untouched",
-          sorted(p.name for p in victim.iterdir()), [])
-    check("mid-routine swap: swap itself left in place, not written through",
-          (dest / "tdarr" / "server").is_symlink(), True)
-
-# --- N1 (fix round 3): the temp fd must not leak when the source is bad ---
-# _write_file used to create the temp file/fd BEFORE stat-ing or opening the
-# source: os.stat(source) or open(source, "rb") raising left the temp file
-# unlinked (the except clause did that) but its fd never closed — a leak on
-# every such failure. _open_fd_count uses /proc/self/fd, Linux-specific like
-# the rest of this module's dir_fd usage.
-def _open_fd_count():
-    return len(os.listdir("/proc/self/fd"))
-
-
-with tempfile.TemporaryDirectory() as root:
-    dest = pathlib.Path(root) / "dest"
-    (dest / "sub").mkdir(parents=True)
-
-    before = _open_fd_count()
-    caught = None
-    try:
-        safe_copy._write_file(str(dest), "sub/missing.txt",
-                              str(dest / "sub" / "does-not-exist.txt"))
-    except OSError as exc:
-        caught = exc
-    after = _open_fd_count()
-
-    check("missing source: raised a clean OSError", isinstance(caught, OSError), True)
-    check("missing source: no fd leak", after, before)
-    check("missing source: no stray temp file left behind",
-          list((dest / "sub").iterdir()), [])
-
-with tempfile.TemporaryDirectory() as root:
-    dest = pathlib.Path(root) / "dest"
-    (dest / "sub").mkdir(parents=True)
-    a_directory = pathlib.Path(root) / "a-directory"
-    a_directory.mkdir()
-
-    before = _open_fd_count()
-    caught = None
-    try:
-        safe_copy._write_file(str(dest), "sub/missing.txt", str(a_directory))
-    except OSError as exc:
-        caught = exc
-    after = _open_fd_count()
-
-    check("directory as source: raised a clean OSError",
-          isinstance(caught, OSError), True)
-    check("directory as source: no fd leak", after, before)
-    check("directory as source: no stray temp file left behind",
-          list((dest / "sub").iterdir()), [])
 
 # --- A failing git command fails the install loudly, never a fallback -----
 # Ruling 18: git 2.47 on the reference host refuses a repository it does not

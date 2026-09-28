@@ -32,6 +32,11 @@ What is guaranteed, and how:
 - an export's directory walk (no .git) refuses a symlinked directory
   outright instead of silently skipping it, which is os.walk()'s own
   behaviour for a symlinked entry in dirnames when followlinks=False.
+- the deploy dir ITSELF is the one exception: it is opened following a
+  symlink, not refusing one (Ruling 24). It is root-controlled and no
+  compose bind mount reaches it — every mount targets a subdirectory below
+  it — so an operator may legitimately symlink /opt/nivuus/media-manager to
+  another disk. Every component below it still refuses one.
 """
 import errno
 import os
@@ -48,6 +53,12 @@ ENV_BASENAME = ".env"
 # there is no path left to resolve again after the kernel has decided.
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _TMP_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+
+# The deploy dir ITSELF is opened following a symlink (no O_NOFOLLOW): it is
+# root-controlled and no compose bind mount reaches it, only subdirectories
+# below it do, so an operator may legitimately symlink it to another disk
+# (Ruling 24). Every component below it keeps O_NOFOLLOW.
+_DEST_ROOT_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
 
 
 def git_tracked_stack_files(pkg_dir):
@@ -195,14 +206,18 @@ def _open_dest_dir_fd(dest_root, rel_dir):
     """Walk from dest_root down to a file's own directory, one path
     component at a time, entirely through directory file descriptors.
 
-    dest_root itself is opened by path: it is the deploy dir, fixed and
-    root-controlled before this hook ever runs (see copy_stack), not
-    something a container's bind mount reaches. Every component below it —
-    the part a container CAN reach, such as Tdarr's own
+    dest_root itself is opened FOLLOWING a symlink (_DEST_ROOT_FLAGS, no
+    O_NOFOLLOW): it is the deploy dir, fixed and root-controlled before this
+    hook ever runs (see copy_stack), not something a container's bind mount
+    reaches — every mount targets a subdirectory below it, never the deploy
+    dir itself — so an operator may legitimately symlink
+    /opt/nivuus/media-manager to another disk (Ruling 24). Every component
+    below it — the part a container CAN reach, such as Tdarr's own
     tdarr/server/Tdarr/Plugins/... — goes through _ensure_dir_component
-    instead, which is what actually enforces the no-symlink guarantee.
+    instead, with O_NOFOLLOW, which is what actually enforces the
+    no-symlink guarantee.
     """
-    dir_fd = os.open(dest_root, _DIR_FLAGS)
+    dir_fd = os.open(dest_root, _DEST_ROOT_FLAGS)
     try:
         if rel_dir:
             for part in rel_dir.split(os.sep):
