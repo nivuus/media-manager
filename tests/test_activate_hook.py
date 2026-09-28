@@ -135,23 +135,18 @@ check("ordre conserve",
       activate.services_to_start(DECLARED, ["tdarr"]),
       ["radarr", "sonarr", "tdarr-node", "tdarr-node-nvenc"])
 
-# --- Le timer de menage n'est arme qu'avec une cle Tautulli ---------------
-# media_cleanup.py sort en 1 quand TAUTULLI_API_KEY est vide, et le timer le
-# lance sans --status : l'armer sans la cle donnerait une unite en echec tous
-# les jours a 08:00. La cle n'est pas recoltable, elle se saisit a la main.
-check("les trois timers avec la cle",
-      activate.timers_to_arm({"TAUTULLI_API_KEY": "une-cle"}),
-      activate.TIMERS)
-check("menage non arme sans la cle",
-      activate.timers_to_arm({"TAUTULLI_API_KEY": ""}),
+# --- media-manager-cleanup.timer is never armed (item 2, audit H2) --------
+# media_cleanup.py over-deletes and ranks re-requested titles first; its
+# timer is disabled on the reference host pending a replacement. activate
+# must not arm it itself under any condition — the unit files are still
+# shipped (install.py) so an operator can run it by hand, or arm it
+# deliberately. The two other timers keep today's behaviour: armed
+# unconditionally.
+check("cleanup timer is never armed",
+      "media-manager-cleanup.timer" in activate.TIMERS, False)
+check("the two other timers are armed",
+      activate.TIMERS,
       ["media-manager-reset-error.timer", "media-manager-update-wanted.timer"])
-check("menage non arme si la cle est absente",
-      activate.timers_to_arm({}),
-      ["media-manager-reset-error.timer", "media-manager-update-wanted.timer"])
-
-check("lecture d'un .env",
-      activate.env_values("# note\nA=1\n\nB = deux \nC\n"),
-      {"A": "1", "B": "deux"})
 
 # --- Armement des timers par symlink --------------------------------------
 with tempfile.TemporaryDirectory() as root:

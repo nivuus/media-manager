@@ -22,13 +22,14 @@ Trois choses, dans cet ordre, parce que chacune depend de la precedente.
    l'installation de la mediatheque en echec. Seul un demarrage ou RIEN ne
    tourne l'est.
 
-2. RECOLTER LES CLES API. Elles n'existent pas au moment du wizard — chaque
-   service la genere a son premier demarrage, dans le config.xml de son
-   volume de configuration. Sans cette recolte, les trois timers de
-   maintenance tourneraient a vide indefiniment : armes, annonces, et
-   silencieusement inertes. Seuls Radarr, Sonarr et Prowlarr sont recoltables
-   ainsi ; Bazarr, Tautulli et Seerr rangent la leur ailleurs et restent a
-   renseigner a la main.
+2. HARVEST THE API KEYS. They do not exist yet at wizard time — each service
+   generates its own on first start, inside its config volume's config.xml.
+   Without this harvest, reset-error and update-wanted (the two timers this
+   phase arms — see the TIMERS comment below on cleanup) would run
+   indefinitely against an empty key: armed, announced, and silently inert.
+   Only Radarr, Sonarr and Prowlarr can be harvested this way; Bazarr,
+   Tautulli and Seerr keep theirs elsewhere and stay to be filled in by
+   hand.
 
 3. ARMER LES TIMERS. Par SYMLINK, jamais par `systemctl enable` : systemctl
    echoue silencieusement en environnement contraint — une sous-commande de
@@ -57,22 +58,15 @@ from atomic_env import write_env
 DEPLOY = "/opt/nivuus/media-manager"
 UNIT_DIR = "etc/systemd/system"
 
+# media-manager-cleanup.timer is deliberately NOT armed here (audit H2):
+# media_cleanup.py over-deletes and ranks re-requested titles first, and the
+# unit is disabled on the reference host pending a replacement. Its unit
+# files are still shipped by install.py, so an operator can still run it by
+# hand, or arm it deliberately, once the flow is fixed.
 TIMERS = [
     "media-manager-reset-error.timer",
     "media-manager-update-wanted.timer",
-    "media-manager-cleanup.timer",
 ]
-
-# Timers qu'on n'arme QUE si une variable du .env est renseignee.
-#
-# media_cleanup.py appelle check_api_keys(), qui sort en 1 quand
-# TAUTULLI_API_KEY est vide — et le timer le lance sans --status, donc la
-# verification s'applique. Cette cle n'est PAS recoltable : Tautulli ne
-# l'ecrit pas dans un config.xml, elle se saisit a la main. L'armer quand
-# meme donnerait une unite en echec tous les jours a 08:00, c'est-a-dire du
-# bruit qui apprend a ignorer les unites en echec. Elle s'arme d'elle-meme au
-# prochain passage de cette phase, une fois la cle renseignee.
-CONDITIONAL_TIMERS = {"media-manager-cleanup.timer": "TAUTULLI_API_KEY"}
 
 # Variable du .env -> config.xml qui porte la cle, relatif au deploiement.
 HARVEST = {
@@ -126,29 +120,6 @@ def fill_env(text, keys):
                 continue
         lines.append(line)
     return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
-
-
-def env_values(text):
-    """Les paires cle/valeur d'un .env, commentaires et lignes vides ignores."""
-    values = {}
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key, _, value = stripped.partition("=")
-            values[key.strip()] = value.strip()
-    return values
-
-
-def timers_to_arm(values):
-    """Les timers a armer, au vu des variables presentes dans le .env.
-
-    Un timer conditionnel dont la variable est vide n'est pas arme : voir
-    CONDITIONAL_TIMERS. Il ne s'agit pas de le desactiver definitivement — la
-    phase se rejoue, et il s'arme des que la cle est renseignee.
-    """
-    return [timer for timer in TIMERS
-            if timer not in CONDITIONAL_TIMERS
-            or values.get(CONDITIONAL_TIMERS[timer])]
 
 
 def arm(root, unit, wants):
@@ -273,14 +244,9 @@ def main():
     write_env(env_path, filled)
 
     emit({"event": "progress", "pct": 85, "msg": "Armement des timers"})
-    armed = timers_to_arm(env_values(filled))
-    for skipped in [t for t in TIMERS if t not in armed]:
-        emit({"event": "progress", "pct": 85,
-              "msg": f"{skipped} non arme : {CONDITIONAL_TIMERS[skipped]} "
-                     "n'est pas renseigne dans le .env"})
-    for timer in armed:
+    for timer in TIMERS:
         arm(root, timer, "timers.target.wants")
-    failed = start_units(armed)
+    failed = start_units(TIMERS)
     if failed:
         emit({"event": "progress", "pct": 95,
               "msg": "Timers lies mais non demarres, actifs au prochain "
