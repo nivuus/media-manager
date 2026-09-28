@@ -13,13 +13,16 @@ deux fois dans ce projet.
 
 Run: python3 tests/test_install_hook.py
 """
+import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 HOOK = REPO / "hooks" / "install.py"
@@ -287,6 +290,107 @@ with tempfile.TemporaryDirectory() as root:
     check("failure-notify removed: stale drop-in gone", stale.exists(), False)
     check("failure-notify removed: sibling file untouched",
           sibling.read_text(), "# kept\n")
+
+# --- A git checkout deploys only what git tracks under stack/ -------------
+# build.sh exports via `git archive HEAD`, so an export already went through
+# the commit filter and is copied as-is. A checkout has not: copying the
+# whole subtree would ship whatever sits there uncommitted, most often a
+# real .env or a service's runtime config.xml. This fixture is a SEPARATE,
+# self-contained package directory (its own hooks/, systemd/, stack/, .git)
+# so HERE resolves inside it when its own copy of install.py runs, and the
+# real repository is never touched.
+def build_git_checkout(pkg):
+    shutil.copytree(REPO / "hooks", pkg / "hooks")
+    shutil.copytree(REPO / "systemd", pkg / "systemd")
+    (pkg / "stack").mkdir()
+    shutil.copy2(REPO / "stack" / "env.template", pkg / "stack" / "env.template")
+    (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
+
+    def git(*args):
+        proc = subprocess.run(["git", *args], cwd=str(pkg),
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+
+    git("init", "-q")
+    git("add", "stack/env.template", "stack/docker-compose.yml")
+    git("-c", "user.email=t@t.test", "-c", "user.name=t",
+        "commit", "-q", "-m", "tracked files")
+
+    # Untracked: must never reach the deployment.
+    (pkg / "stack" / ".env").write_text("RADARR_API_KEY=leaked-untracked-key\n")
+    (pkg / "stack" / "radarr").mkdir()
+    (pkg / "stack" / "radarr" / "config.xml").write_text("<Config/>\n")
+
+
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    build_git_checkout(pkg)
+    fake_group_file(root)
+
+    proc = subprocess.run(
+        [sys.executable, str(pkg / "hooks" / "install.py"),
+         "--phase", "install", "--root", root],
+        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg))
+    check("checkout: exit status", proc.returncode, 0)
+
+    dest = pathlib.Path(root) / DEST_REL
+    check("checkout: tracked file deployed",
+          (dest / "docker-compose.yml").is_file(), True)
+    check("checkout: untracked config.xml not deployed",
+          (dest / "radarr" / "config.xml").exists(), False)
+    # The rendered .env is always written; the proof the untracked stack/.env
+    # was never copied (and therefore never merge_env()-preserved) is that
+    # its content never reaches the deployed one.
+    check("checkout: untracked .env content not deployed",
+          "leaked-untracked-key" in (dest / ".env").read_text(), False)
+
+# --- A git-archive export (no .git) still deploys the whole tree ----------
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    shutil.copytree(REPO / "hooks", pkg / "hooks")
+    shutil.copytree(REPO / "systemd", pkg / "systemd")
+    (pkg / "stack").mkdir()
+    shutil.copy2(REPO / "stack" / "env.template", pkg / "stack" / "env.template")
+    (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
+    # No .git anywhere: this is what `git archive HEAD | tar -x` produces.
+    fake_group_file(root)
+
+    proc = subprocess.run(
+        [sys.executable, str(pkg / "hooks" / "install.py"),
+         "--phase", "install", "--root", root],
+        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg))
+    check("archive export: exit status", proc.returncode, 0)
+    dest = pathlib.Path(root) / DEST_REL
+    check("archive export: file deployed",
+          (dest / "docker-compose.yml").is_file(), True)
+
+# --- The git command's exact argv is pinned (Ruling 18) --------------------
+# git 2.47 on the reference host refuses a repository it does not own when
+# run as root ("detected dubious ownership": the checkout is the operator's,
+# install runs as root), unless safe.directory names it explicitly. The real
+# git binary still runs here (a transparent spy, not a mock) — only the argv
+# it was called with is pinned.
+sys.path.insert(0, str(REPO / "hooks"))
+_spec = importlib.util.spec_from_file_location("install_hook_argv", HOOK)
+install_hook_argv = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(install_hook_argv)
+
+_real_run = subprocess.run
+_git_calls = []
+
+
+def _spy_run(argv, **kwargs):
+    _git_calls.append(list(argv))
+    return _real_run(argv, **kwargs)
+
+
+with mock.patch("subprocess.run", new=_spy_run):
+    install_hook_argv.git_tracked_stack_files(str(REPO))
+
+check("git argv pinned", _git_calls, [
+    ["git", "-c", f"safe.directory={REPO}", "-C", str(REPO),
+     "ls-files", "-z", "stack/"],
+])
 
 if failures:
     print("\n".join(failures))

@@ -27,11 +27,20 @@ TROIS REGLES PORTENT LE RESTE.
    {root}/dev/dri repondrait donc « absent » sur toute machine installee
    depuis l'ISO, y compris celles qui ont un iGPU. La machine qui execute
    l'installateur EST la machine cible : c'est son /dev/dri qui fait foi.
+
+4. A GIT CHECKOUT DEPLOYS ONLY WHAT GIT TRACKS. `git ls-files -z stack/`
+   picks the file list instead of a raw directory walk, so an untracked
+   stack/.env or a service's runtime config.xml sitting in the working tree
+   is never shipped. A `git archive` export (build.sh) has no .git and
+   already went through the commit filter at export time, so it is copied
+   as the whole tree, exactly as before. `.git` as a worktree's own pointer
+   FILE (not a directory) still counts as a checkout.
 """
 import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 
 from atomic_env import write_env
@@ -69,6 +78,51 @@ RENDER_NODES = "/dev/dri"
 
 def emit(event):
     print(json.dumps(event), flush=True)
+
+
+def git_tracked_stack_files(pkg_dir):
+    """The paths `git ls-files` reports under stack/, or None outside a checkout.
+
+    A package directory with no .git — a file for a worktree, a directory
+    for a plain clone, see rule 4 above — is a `git archive` export: every
+    file it holds already went through the commit filter, so there is
+    nothing left to distrust. `safe.directory=` is required because the
+    install hook runs as root while the checkout is normally owned by the
+    operator: git 2.47 refuses a repository it does not own ("detected
+    dubious ownership") unless told to trust it explicitly. A non-zero exit
+    is raised, never swallowed into "copy everything" — that fallback is
+    exactly what would ship an untracked .env or a service's config.xml.
+    """
+    if not os.path.exists(os.path.join(pkg_dir, ".git")):
+        return None
+    proc = subprocess.run(
+        ["git", "-c", f"safe.directory={pkg_dir}", "-C", pkg_dir,
+         "ls-files", "-z", "stack/"],
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"git ls-files -z stack/: {(proc.stderr or '').strip()}")
+    return [path for path in proc.stdout.split("\0") if path]
+
+
+def copy_stack(pkg_dir, stack_dir, dest):
+    """Deploy stack/ to dest: git-tracked files only in a checkout (rule 4),
+    the whole subtree otherwise."""
+    tracked = git_tracked_stack_files(pkg_dir)
+    if tracked is None:
+        shutil.copytree(stack_dir, dest, symlinks=True, dirs_exist_ok=True)
+        return
+    prefix = "stack/"
+    for relpath in tracked:
+        if not relpath.startswith(prefix):
+            continue  # ls-files was scoped to stack/; defensive only
+        source = os.path.join(pkg_dir, relpath)
+        target = os.path.join(dest, relpath[len(prefix):])
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        if os.path.islink(source):
+            os.symlink(os.readlink(source), target)
+        else:
+            shutil.copy2(source, target)
 
 
 def group_gid(root, name):
@@ -183,7 +237,9 @@ def main():
 
     # Valider AVANT de deposer le premier octet : un appelant et le package en
     # desaccord sur le contrat est une erreur, pas quelque chose a contourner
-    # au milieu d'une copie.
+    # au milieu d'une copie. A failing git-tracked-files lookup (rule 4) must
+    # fail just as loudly, and just as early: falling back to a raw copy is
+    # exactly what would ship an untracked .env or config.xml.
     try:
         nvenc = bool_answer(answers, "nvenc_node")
         usenet = bool_answer(answers, "usenet")
@@ -192,14 +248,15 @@ def main():
                                 "/media/backup/.transcode")
         timezone = text_answer(answers, "timezone", "Europe/Paris")
         plex_claim = text_answer(answers, "plex_claim")
-    except ValueError as exc:
+
+        dest = os.path.join(root, DEST_REL)
+
+        emit({"event": "progress", "pct": 20, "msg": "Depose de la pile"})
+        copy_stack(HERE, STACK, dest)
+    except (ValueError, RuntimeError) as exc:
         print(f"media-manager install: {exc}", file=sys.stderr)
         return 1
 
-    dest = os.path.join(root, DEST_REL)
-
-    emit({"event": "progress", "pct": 20, "msg": "Depose de la pile"})
-    shutil.copytree(STACK, dest, symlinks=True, dirs_exist_ok=True)
     # Le gabarit a fait son travail ; le laisser a cote du .env rendu ne
     # laisserait pas savoir lequel fait foi.
     template_copy = os.path.join(dest, TEMPLATE_NAME)
