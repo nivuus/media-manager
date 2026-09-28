@@ -83,6 +83,22 @@ check("profil du node NVENC",
 check("profil de SABnzbd",
       main["services"]["sabnzbd"].get("profiles"), ["usenet"])
 
+# Maintainerr has no authentication on its UI or API: it is published on the
+# loopback only (a bare `6246:6246` would expose it on every interface), and it
+# does not run as root, so its data volume is the install hook's business.
+maintainerr = main["services"]["maintainerr"]
+check("maintainerr: port on loopback only",
+      maintainerr.get("ports"), ["127.0.0.1:6246:6246"])
+check("maintainerr: runs as the stack user",
+      maintainerr.get("user"), "${PUID}:${PGID}")
+check("maintainerr: not in the QSV overlay",
+      "maintainerr" in qsv["services"], False)
+check("maintainerr: data volume", maintainerr.get("volumes"),
+      ["./maintainerr:/opt/data"])
+check("maintainerr: probes the liveness endpoint with curl",
+      maintainerr["healthcheck"]["test"],
+      ["CMD", "curl", "-fsS", "http://127.0.0.1:6246/api/health/live"])
+
 # Un service derriere un profil ne doit etre la cible d'aucun depends_on : un
 # service actif qui depend d'un service non selectionne fait echouer le
 # demarrage entier.
