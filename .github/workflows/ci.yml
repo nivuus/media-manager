@@ -12,3 +12,17 @@ jobs:
     uses: nivuus/.github/.github/workflows/security.yml@main
   package:
     uses: nivuus/.github/.github/workflows/ci-package.yml@main
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # The standard library covers everything else the test suite and the
+      # hooks import; PyYAML, requests and python-dotenv are the only
+      # third-party dependencies (see nivuus-package.yaml's apt list).
+      - run: pip install PyYAML requests python-dotenv
+      - run: make test
