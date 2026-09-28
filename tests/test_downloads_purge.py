@@ -19,8 +19,12 @@ sys.dont_write_bytecode = True
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "stack"))
 
+from maintenance.arr_api import Failures  # noqa: E402
 from maintenance.downloads_purge import (  # noqa: E402
-    download_present, names_under, unmounted_library_reason)
+    download_present, names_under, purge)
+from maintenance_fakes import LogCapture  # noqa: E402
+
+LogCapture().install()  # recorded failures are logged: keep them off the output
 
 failures = []
 
@@ -62,25 +66,16 @@ with tempfile.TemporaryDirectory() as tmp:
     except OSError:
         pass
 
-# --- Is the media disk there at all? ---------------------------------------
-# Unmounted, Docker recreates the bind sources as empty directories: an empty
-# Downloads directory would then make every download look vanished. The
-# evidence is a library directory (Movies, TV Shows) that holds something.
+# --- The purge never creates a missing Downloads directory -----------------
+# The storage guard stops a run before the purge when Downloads is missing;
+# the purge keeps its own contract anyway: report, and create nothing, since
+# with the media disk unmounted that would write into the bare mount point.
 with tempfile.TemporaryDirectory() as tmp:
-    movies, shows = pathlib.Path(tmp) / "Movies", pathlib.Path(tmp) / "TV Shows"
-    library = [str(movies), str(shows)]
-    check("library missing: unmounted", unmounted_library_reason(library) is not None, True)
-    movies.mkdir()
-    shows.mkdir()
-    check("library empty: unmounted", unmounted_library_reason(library) is not None, True)
-    (shows / "Some Show").mkdir()
-    check("shows only: mounted", unmounted_library_reason(library), None)
-    shows.joinpath("Some Show").rmdir()
-    shows.rmdir()
-    (movies / "Some Movie (2021)").mkdir()
-    check("movies only, no show directory: mounted", unmounted_library_reason(library), None)
-check("no library directory configured: unmounted",
-      unmounted_library_reason([]) is not None, True)
+    missing = pathlib.Path(tmp) / "Downloads"
+    recorded = Failures()
+    purge(str(missing), set(), (0, 0), recorded)
+    check("purge of a missing directory: failure recorded", recorded.count, 1)
+    check("purge of a missing directory: not created", missing.exists(), False)
 
 if failures:
     print("\n".join(failures))

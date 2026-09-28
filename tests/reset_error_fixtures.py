@@ -95,6 +95,11 @@ STALLED = {
     "size": 1_500_000_000, "sizeleft": 1_500_000_000, "added": iso(30),
     "episode": {"seasonNumber": 2, "episodeNumber": 3},
 }
+# What /api/v3/rootfolder answers while the media disk is mounted.
+RADARR_ROOT = {"id": 1, "path": "/data/Movies", "accessible": True,
+               "freeSpace": 1_234_567_890_000, "unmappedFolders": []}
+SONARR_ROOT = {"id": 1, "path": "/data/TV Shows", "accessible": True,
+               "freeSpace": 1_234_567_890_000, "unmappedFolders": []}
 # What Radarr answers /manualimport with for the pending download on disk.
 CANDIDATES = [{
     "id": 1, "path": f"/data/Downloads/radarr/{PENDING}/movie.mkv",
@@ -109,9 +114,8 @@ CANDIDATES = [{
 }]
 
 
-def make_downloads(tmp, library=True):
-    """A Downloads directory as rdtclient leaves it, every file two days old,
-    next to a mounted media library unless library=False."""
+def make_downloads(tmp):
+    """A Downloads directory as rdtclient leaves it: every file two days old."""
     root = pathlib.Path(tmp) / "Downloads"
     old = time.time() - 48 * 3600
     for rel in (f"radarr/{MOVIE}/movie.mkv", f"radarr/{PENDING}/movie.mkv",
@@ -121,17 +125,7 @@ def make_downloads(tmp, library=True):
         path.write_bytes(b"\0" * 16)
         os.utime(path, (old, old))
     (root / "tv-sonarr").mkdir()
-    if library:
-        make_library(tmp)
     return root
-
-
-def make_library(tmp):
-    """The media library of a mounted disk: one movie, no show yet."""
-    movie = pathlib.Path(tmp) / "Movies" / "Some Movie (2021)" / "Some Movie (2021).mkv"
-    movie.parent.mkdir(parents=True)
-    movie.write_bytes(b"\0" * 16)
-    (pathlib.Path(tmp) / "TV Shows").mkdir()
 
 
 def environment(downloads):
@@ -139,8 +133,6 @@ def environment(downloads):
         "RADARR_URL": "http://radarr.test:7878", "RADARR_API_KEY": "radarr-key",
         "SONARR_URL": "http://sonarr.test:8989", "SONARR_API_KEY": "sonarr-key",
         "DOWNLOADS_DIR": str(downloads),
-        "MOVIES_DIR": str(downloads.parent / "Movies"),
-        "TV_DIR": str(downloads.parent / "TV Shows"),
         # chown to ourselves works as any user; the test must not need root.
         "PUID": str(os.getuid()), "PGID": str(os.getgid()),
     }
@@ -149,6 +141,8 @@ def environment(downloads):
 def routes(radarr_queue=None, sonarr_queue=None):
     """Every route a run uses, answering as a healthy stack would."""
     return {
+        ("GET", f"{RADARR}/rootfolder"): reply(200, [RADARR_ROOT]),
+        ("GET", f"{SONARR}/rootfolder"): reply(200, [SONARR_ROOT]),
         ("GET", f"{RADARR}/queue"): reply(200, queue_page(
             [DOWNLOADING] if radarr_queue is None else radarr_queue)),
         ("GET", f"{SONARR}/queue"): reply(200, queue_page(

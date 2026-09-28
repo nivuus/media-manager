@@ -4,10 +4,12 @@ Run by media-manager-reset-error.service through stack/reset-error.py, which
 only calls main(): a file name with a hyphen cannot be imported, and this
 module is what the tests import.
 
-The run fails closed. The purge only happens when every queue was read in
-full, since the queues are what protects a download from it; any API or I/O
-failure is recorded, the run does what it still safely can, and the exit
-status is 1 so that systemd marks the unit failed.
+The run fails closed. Before any action it checks that the storage is
+evidently there (storage_guard.py), and changes nothing at all when it is
+not. The purge only happens when every queue was read in full, since the
+queues are what protects a download from it; any API or I/O failure is
+recorded, the run does what it still safely can, and the exit status is 1 so
+that systemd marks the unit failed.
 """
 import logging
 import os
@@ -19,10 +21,10 @@ from maintenance.arr_api import (ApiError, Failures, load_environment,
                                  sonarr_instances)
 from maintenance.dead_metadata import remove_dead_entries
 from maintenance.downloads_purge import (download_present, names_under,
-                                         protected_names, purge,
-                                         unmounted_library_reason)
+                                         protected_names, purge)
 from maintenance.queue_actions import fetch_queue, manual_import, remove_queue_item
 from maintenance.queue_policy import classify_item, item_age_hours
+from maintenance.storage_guard import storage_problems
 
 log = logging.getLogger(__name__)
 
@@ -158,9 +160,16 @@ def run(environ):
     failures = Failures()
     now = datetime.now(timezone.utc)
     downloads_dir = environ.get('DOWNLOADS_DIR', DEFAULT_DOWNLOADS_DIR)
-    library_dirs = [path for path in (environ.get('MOVIES_DIR'), environ.get('TV_DIR'))
-                    if path]
     owner = (int(environ.get('PUID', 1000)), int(environ.get('PGID', 1000)))
+
+    # Before any action. With storage unavailable, the apps' own messages
+    # ("No files found...") are unreliable and every rule would act on a
+    # broken view, so the run then changes nothing at all.
+    problems = storage_problems(instances, downloads_dir)
+    if problems:
+        failures.record('Storage looks unavailable, nothing changed this run',
+                        '; '.join(problems))
+        return exit_status(failures)
 
     # One read per queue: the same rows protect downloads from the purge and
     # are then processed, so both steps see the same queue.
@@ -171,44 +180,37 @@ def run(environ):
         except ApiError as error:
             failures.record(f'[{instance}] queue unreadable', error)
 
-    # Nothing on disk is judged or touched unless the media disk is evidently
-    # mounted. Unmounted, Docker recreates an empty Downloads directory: every
-    # download would look vanished and be removed from its client, then purged
-    # as an orphan 24 h after the disk comes back.
-    library_problem = unmounted_library_reason(library_dirs)
-    if library_problem:
-        failures.record('Media library looks unmounted (Downloads left untouched, '
-                        'no row removed as files-gone)', library_problem)
-        names = None  # presence unknown for every row
+    if len(queues) == len(instances):
+        # Protect files still tied to an active download before purging by age.
+        purge(downloads_dir,
+              protected_names(record for _, records in queues for record in records),
+              owner, failures)
     else:
-        if len(queues) == len(instances):
-            # Protect files still tied to an active download before purging.
-            purge(downloads_dir,
-                  protected_names(record for _, records in queues for record in records),
-                  owner, failures)
-        else:
-            # A queue we could not read may reference any file in Downloads:
-            # with Radarr unreachable for 7 days, purging anyway deleted a
-            # completed, unimported 36.8 GB download (audit C2).
-            log.warning('Downloads purge skipped: a queue could not be read, '
-                        'so the downloads it references are unknown.')
+        # A queue we could not read may reference any file in Downloads: with
+        # Radarr unreachable for 7 days, purging anyway deleted a completed,
+        # unimported 36.8 GB download (audit C2).
+        log.warning('Downloads purge skipped: a queue could not be read, '
+                    'so the downloads it references are unknown.')
 
-        # What is still on disk decides which import-pending rows lost their
-        # files. Listed after the purge, so it shows what the processing will
-        # face: a download folder the purge found empty, and removed, counts
-        # as gone.
-        try:
-            names = names_under(downloads_dir)
-        except OSError as error:
-            # Presence unknown: no row is removed as files-gone this run.
-            failures.record(f'Downloads directory {downloads_dir} cannot be listed', error)
-            names = None
+    # What is still on disk decides which import-pending rows lost their files.
+    # Listed after the purge, so it shows what the processing will face: a
+    # download folder the purge found empty, and removed, counts as gone.
+    try:
+        names = names_under(downloads_dir)
+    except OSError as error:
+        # Presence unknown: no row is removed as files-gone this run.
+        failures.record(f'Downloads directory {downloads_dir} cannot be listed', error)
+        names = None
 
     # The queues that were read are still processed.
     for instance, records in queues:
         process_queue(instance, records, names, now, failures)
     remove_dead_entries(instances, failures)
+    return exit_status(failures)
 
+
+def exit_status(failures):
+    """1 when the run recorded any failure, 0 otherwise."""
     if failures.count:
         log.error('Run finished with %d failure(s).', failures.count)
         return 1

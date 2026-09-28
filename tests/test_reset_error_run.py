@@ -13,7 +13,6 @@ unit's OnFailure= alert never fired.
 
 Run: python3 tests/test_reset_error_run.py
 """
-import pathlib
 import sys
 import tempfile
 
@@ -27,7 +26,7 @@ from maintenance_fakes import reply  # noqa: E402
 from reset_error_fixtures import (  # noqa: E402
     CANDIDATES, DOWNLOADING, IMPORT_PENDING, IMPORT_VANISHED, MOVIE, PENDING,
     RADARR, SONARR, UNREFERENCED, case, import_routes, make_downloads,
-    make_library, queue_page, routes, run)
+    queue_page, routes, run)
 
 failures = []
 
@@ -50,18 +49,18 @@ with tempfile.TemporaryDirectory() as tmp, case("all readable", failures):
           (downloads / "tv-sonarr").is_dir(), True)
     # One read per queue feeds both the protection set and the processing:
     # the purge protects exactly what the processing then acts on.
-    check("all readable: Radarr queue read once",
-          len(api.made("GET", f"{RADARR}/queue")), 1)
-    check("all readable: Sonarr queue read once",
-          len(api.made("GET", f"{SONARR}/queue")), 1)
+    radarr_reads = api.made("GET", f"{RADARR}/queue")
+    sonarr_reads = api.made("GET", f"{SONARR}/queue")
+    check("all readable: Radarr queue read once", len(radarr_reads), 1)
+    check("all readable: Sonarr queue read once", len(sonarr_reads), 1)
     # 'Unknown' items are left out by the API unless asked for, and they are
     # the ones that stay stuck forever.
     check("all readable: unknown movies asked for",
-          api.made("GET", f"{RADARR}/queue")[0]["params"].get(
-              "includeUnknownMovieItems"), True)
+          [read["params"].get("includeUnknownMovieItems") for read in radarr_reads],
+          [True])
     check("all readable: unknown series asked for",
-          api.made("GET", f"{SONARR}/queue")[0]["params"].get(
-              "includeUnknownSeriesItems"), True)
+          [read["params"].get("includeUnknownSeriesItems") for read in sonarr_reads],
+          [True])
     deletes = api.made("DELETE", f"{SONARR}/queue/202")
     check("all readable: warning row removed", len(deletes), 1)
     if deletes:
@@ -163,15 +162,6 @@ for label, target, error in PURGE_IO:
         code, _, _ = run(routes(), downloads, patches=[(target, error)])
         check(f"{label}: exit status", code, 1)
 
-# A missing Downloads directory is reported, never created: when the media
-# disk is not mounted, creating it would write into the bare mount point.
-with tempfile.TemporaryDirectory() as tmp, case("missing Downloads", failures):
-    make_library(tmp)
-    missing = pathlib.Path(tmp) / "Downloads"
-    code, _, _ = run(routes(), missing)
-    check("missing Downloads: exit status", code, 1)
-    check("missing Downloads: not created", missing.exists(), False)
-
 # --- Files gone: decided from the Downloads directory ---------------------
 # An import-pending row whose download is no longer on disk is removed from
 # the client WITHOUT blocklisting: the release was fine, its files vanished.
@@ -229,41 +219,6 @@ with tempfile.TemporaryDirectory() as tmp, case("local problem", failures):
     check("local problem: manual import attempted",
           len(api.made("GET", f"{RADARR}/manualimport")), 1)
     check("local problem: row kept", api.made("DELETE", f"{RADARR}/queue/105"), [])
-
-# Downloads cannot be listed: presence is unknown, nothing is concluded from
-# it, and the failure is recorded.
-with tempfile.TemporaryDirectory() as tmp, case("presence unknown", failures):
-    make_library(tmp)
-    missing = pathlib.Path(tmp) / "Downloads"
-    code, api, _ = run(import_routes(), missing)
-    check("presence unknown: exit status", code, 1)
-    check("presence unknown: no files-gone removal",
-          api.made("DELETE", f"{RADARR}/queue/104"), [])
-    lookups = [kwargs["params"]["downloadId"]
-               for kwargs in api.made("GET", f"{RADARR}/manualimport")]
-    check("presence unknown: manual import attempted instead",
-          IMPORT_VANISHED["downloadId"] in lookups, True)
-
-# The media library must evidently be mounted before anything on disk is
-# judged. Unmounted, Docker recreates the bind sources as empty directories:
-# every download would look vanished, be removed from its client, and be
-# purged as an orphan 24 h after the disk comes back.
-def empty_library(tmp):
-    for name in ("Movies", "TV Shows"):
-        (pathlib.Path(tmp) / name).mkdir()
-
-
-for label, prepare in (("library missing", None), ("library empty", empty_library)):
-    with tempfile.TemporaryDirectory() as tmp, case(label, failures):
-        downloads = make_downloads(tmp, library=False)
-        if prepare:
-            prepare(tmp)
-        code, api, _ = run(import_routes(), downloads)
-        check(f"{label}: exit status", code, 1)
-        check(f"{label}: no files-gone removal",
-              api.made("DELETE", f"{RADARR}/queue/104"), [])
-        # Nothing on disk is touched in such a run either.
-        check(f"{label}: purge skipped", (downloads / UNREFERENCED).exists(), True)
 
 # Only the listing fails. The purge walks the same tree, so in practice both
 # fail together and the purge's failure alone already sets the exit status;
