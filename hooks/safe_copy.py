@@ -70,15 +70,20 @@ def git_tracked_stack_files(pkg_dir):
     distrust. `safe.directory=` is required because the install hook runs
     as root while the checkout is normally owned by the operator: git 2.47
     refuses a repository it does not own ("detected dubious ownership")
-    unless told to trust it explicitly. A non-zero exit is raised, never
-    swallowed into "copy everything" — that fallback is exactly what would
-    ship an untracked .env or a service's config.xml.
+    unless told to trust it explicitly. Trusting it also means reading its
+    config, and git runs the command `core.fsmonitor` names whenever it
+    reads the index, ls-files included; a worktree's common .git can even
+    belong to another user than the worktree itself. `core.fsmonitor=false`
+    on the command line overrides any such setting, so root never runs it.
+    A non-zero exit is raised, never swallowed into "copy everything" — that
+    fallback is exactly what would ship an untracked .env or a service's
+    config.xml.
     """
     if not os.path.exists(os.path.join(pkg_dir, ".git")):
         return None
     proc = subprocess.run(
-        ["git", "-c", f"safe.directory={pkg_dir}", "-C", pkg_dir,
-         "ls-files", "-z", "stack/"],
+        ["git", "-c", f"safe.directory={pkg_dir}", "-c", "core.fsmonitor=false",
+         "-C", pkg_dir, "ls-files", "-z", "stack/"],
         capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(

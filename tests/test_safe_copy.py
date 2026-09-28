@@ -286,9 +286,11 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
 # --- The git command's exact argv is pinned (Ruling 18) --------------------
 # git 2.47 on the reference host refuses a repository it does not own when
 # run as root ("detected dubious ownership": the checkout is the operator's,
-# install runs as root), unless safe.directory names it explicitly. The real
-# git binary still runs here (a transparent spy, not a mock) — only the argv
-# it was called with is pinned.
+# install runs as root), unless safe.directory names it explicitly. Trusting
+# the checkout also trusts its config, and git runs the command
+# core.fsmonitor names whenever it reads the index: core.fsmonitor=false
+# keeps root from running it. The real git binary still runs here (a
+# transparent spy, not a mock) — only the argv it was called with is pinned.
 _real_run = subprocess.run
 _git_calls = []
 
@@ -302,9 +304,29 @@ with mock.patch("subprocess.run", new=_spy_run):
     safe_copy.git_tracked_stack_files(str(REPO))
 
 check("git argv pinned", _git_calls, [
-    ["git", "-c", f"safe.directory={REPO}", "-C", str(REPO),
-     "ls-files", "-z", "stack/"],
+    ["git", "-c", f"safe.directory={REPO}", "-c", "core.fsmonitor=false",
+     "-C", str(REPO), "ls-files", "-z", "stack/"],
 ])
+
+# --- The checkout's own core.fsmonitor is never run -------------------------
+# A worktree's common .git can belong to another user than the worktree the
+# hook trusts, and `git ls-files` runs the configured fsmonitor command as it
+# reads the index. A checkout configured to run one proves it stays unrun.
+with tempfile.TemporaryDirectory() as fake_pkg:
+    pkg = pathlib.Path(fake_pkg)
+    (pkg / "stack").mkdir()
+    (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
+    git_commit_tracked(pkg, "stack/docker-compose.yml")
+    ran = pkg / "fsmonitor-ran"
+    monitor = pkg / "fsmonitor.sh"
+    monitor.write_text(f"#!/bin/sh\ntouch '{ran}'\nexit 1\n")
+    monitor.chmod(0o755)
+    _real_run(["git", "-C", str(pkg), "config", "core.fsmonitor", str(monitor)],
+              check=True)
+
+    tracked = safe_copy.git_tracked_stack_files(str(pkg))
+    check("fsmonitor: tracked files still listed", tracked, ["stack/docker-compose.yml"])
+    check("fsmonitor: configured command never run", ran.exists(), False)
 
 if failures:
     print("\n".join(failures))
