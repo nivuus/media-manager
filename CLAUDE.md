@@ -272,6 +272,14 @@ why the install hook owns that directory (see "Ce dépôt est un package
 Nivuus"). Healthcheck: `curl` on `/api/health/live` (the image is Alpine with
 curl, no wget). Not in the QSV overlay. See "Disk Cleanup" for its role.
 
+Plex runs with `network_mode: host`, so Maintainerr (bridge network) cannot use
+a container name for it. Its Plex connection uses
+**`host.docker.internal:32400`**, which the service's
+`extra_hosts: ["host.docker.internal:host-gateway"]` resolves to the host
+gateway at start. Do not configure the compose network's gateway IP
+(e.g. 172.19.0.1): it changes whenever the network is recreated. Plex listens
+on all interfaces (`*:32400`), so the gateway address is reachable.
+
 ### Data Flow
 ```
 User Request (Seerr :5055)

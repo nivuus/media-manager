@@ -226,6 +226,12 @@ services:
       - TZ=${TZ}
     ports:
       - 127.0.0.1:6246:6246
+    # Plex runs with network_mode: host, so a bridge container reaches it only
+    # through the host gateway. host-gateway resolves to that address at start,
+    # so it survives the compose network being recreated (Maintainerr's Plex
+    # host is host.docker.internal, not a hardcoded 172.x.0.1).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./maintainerr:/opt/data
     healthcheck:
