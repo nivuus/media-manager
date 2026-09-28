@@ -45,6 +45,7 @@ import shutil
 import sys
 
 from atomic_env import write_env
+from data_dirs import ensure_data_dirs
 from safe_copy import copy_stack
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +54,11 @@ UNITS_SRC = os.path.join(HERE, "systemd")
 
 DEST_REL = "opt/nivuus/media-manager"
 UNIT_REL_DIR = "etc/systemd/system"
+
+# The identity the stack's services run as; rendered into the .env and used
+# to own the data directories of services that do not run as root.
+PUID = 1000
+PGID = 1000
 TEMPLATE_NAME = "env.template"
 
 UNITS = [
@@ -228,6 +234,9 @@ def install(root, answers):
     emit({"event": "progress", "pct": 20, "msg": "Depose de la pile"})
     copy_stack(HERE, STACK, dest)
 
+    # Docker would create these as root, unwritable by a non-root service.
+    ensure_data_dirs(dest, PUID, PGID)
+
     # Le gabarit a fait son travail ; le laisser a cote du .env rendu ne
     # laisserait pas savoir lequel fait foi.
     template_copy = os.path.join(dest, TEMPLATE_NAME)
@@ -252,8 +261,8 @@ def install(root, answers):
 
     rendered = render_env({
         "TZ": timezone,
-        "PUID": "1000",
-        "PGID": "1000",
+        "PUID": str(PUID),
+        "PGID": str(PGID),
         "MEDIA_ROOT": media_root,
         "DOWNLOADS_DIR": f"{media_root}/Downloads",
         "MOVIES_DIR": f"{media_root}/Movies",
