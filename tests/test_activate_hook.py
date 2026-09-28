@@ -198,10 +198,10 @@ with tempfile.TemporaryDirectory() as root:
 # --- run_phase()'s docker/compose failure paths, fake subprocess.run ------
 # Each case isolates exactly ONE failing call; the fake dispatches on argv,
 # like FakeApi dispatches on (method, url) in maintenance_fakes.py, and
-# fails the test loudly on any call it was not told to expect. None of these
-# cases may reach the harvest loop below the compose section: DEPLOY is a
-# hardcoded real path ("/opt/nivuus/media-manager"), and reaching it would
-# either touch a real path or spin in the harvest retry loop for minutes.
+# fails the test loudly on any call it was not told to expect. activate.DEPLOY
+# is patched to a scratch directory for EVERY case (fix round 1, item 5):
+# make test runs as root, DEPLOY is hardcoded to the real
+# /opt/nivuus/media-manager, and nothing here may ever touch it.
 
 
 def completed(argv, returncode=0, stdout="", stderr=""):
@@ -221,18 +221,35 @@ def fake_subprocess(routes):
     return run
 
 
-def run_phase_with(routes):
-    """activate.run_phase() under a fake subprocess.run: (exit code, stderr).
+def run_phase_with(routes, deploy_files=None):
+    """activate.run_phase() under a fake subprocess.run and a fake DEPLOY:
+    (exit code, stderr).
 
+    deploy_files pre-populates the scratch DEPLOY directory (relative path
+    -> content), for a case that reaches the harvest/timers section — a
+    failure case never does (it returns from the compose try/except first).
+    The two armed timers' unit files are always pre-created in the scratch
+    --root, so a success case's arm() calls have something to link to.
     stdout is captured too (emit() prints progress there) so a failing case
     does not spam this test's own output — only the assertions should.
     """
     captured_stderr = io.StringIO()
-    with mock.patch("subprocess.run", new=fake_subprocess(routes)), \
-         mock.patch("sys.stderr", new=captured_stderr), \
-         mock.patch("sys.stdout", new=io.StringIO()), \
+    with tempfile.TemporaryDirectory() as deploy, \
          tempfile.TemporaryDirectory() as root:
-        code = activate.run_phase(root)
+        for relpath, content in (deploy_files or {}).items():
+            full = pathlib.Path(deploy) / relpath
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(content)
+        units_dir = pathlib.Path(root) / "etc/systemd/system"
+        units_dir.mkdir(parents=True)
+        for timer in activate.TIMERS:
+            (units_dir / timer).write_text("[Timer]\n")
+
+        with mock.patch("subprocess.run", new=fake_subprocess(routes)), \
+             mock.patch("sys.stderr", new=captured_stderr), \
+             mock.patch("sys.stdout", new=io.StringIO()), \
+             mock.patch.object(activate, "DEPLOY", deploy):
+            code = activate.run_phase(root)
     return code, captured_stderr.getvalue()
 
 
@@ -296,6 +313,35 @@ code, err = run_phase_with({
 check("up fails: exit status", code, 1)
 check("up fails: command named", "compose up -d" in err, True)
 check("up fails: stderr kept", "could not select device driver" in err, True)
+
+# --- Full success path, so a mutant that raises on every `up` is caught ---
+# (fix round 1, item 5). `up` is actually called and succeeds (todo is not
+# empty), then the harvest loop and the timer arming both run for real,
+# against the scratch DEPLOY and --root run_phase_with() sets up. The
+# config.xml files are pre-filled so the harvest loop's `all(keys.values())`
+# is true on its first pass — otherwise it would sleep for real, in a loop
+# bounded by HARVEST_TIMEOUT (up to 600 s).
+CONFIG_XML = ('<?xml version="1.0" encoding="utf-8"?>\n'
+             '<Config><ApiKey>{}</ApiKey></Config>\n')
+UP_SUCCESS = ("docker", "compose", "up", "-d", "sonarr")
+code, err = run_phase_with({
+    VERSION: completed(VERSION),
+    CONFIG: completed(CONFIG, stdout="radarr\nsonarr\n"),
+    PS_A: completed(PS_A, stdout="radarr\n"),
+    UP_SUCCESS: completed(UP_SUCCESS),
+    ("systemctl", "daemon-reload"): completed(("systemctl", "daemon-reload")),
+    ("systemctl", "start", "media-manager-reset-error.timer"):
+        completed(("systemctl", "start", "media-manager-reset-error.timer")),
+    ("systemctl", "start", "media-manager-update-wanted.timer"):
+        completed(("systemctl", "start", "media-manager-update-wanted.timer")),
+}, deploy_files={
+    ".env": "RADARR_API_KEY=\nSONARR_API_KEY=\nPROWLARR_API_KEY=\n",
+    "radarr/config.xml": CONFIG_XML.format("radarr-key"),
+    "sonarr/config.xml": CONFIG_XML.format("sonarr-key"),
+    "prowlarr/config.xml": CONFIG_XML.format("prowlarr-key"),
+})
+check("success path: exit status", code, 0)
+check("success path: no stderr", err, "")
 
 if failures:
     print("\n".join(failures))
