@@ -94,6 +94,18 @@ with tempfile.TemporaryDirectory() as root:
                 "scripts/tdarr/build_flow_v6.py"):
         check(f"depose: {rel}", (dest / rel).is_file(), True)
 
+    # reset-error.py and update_wanted.py are thin wrappers: what the units
+    # actually run is the maintenance package next to them, so every one of
+    # its modules must land there too, byte for byte.
+    modules = sorted((REPO / "stack" / "maintenance").glob("*.py"))
+    check("maintenance package found in the source",
+          {"__init__.py", "reset_error.py", "update_wanted.py"}
+          <= {module.name for module in modules}, True)
+    for module in modules:
+        deployed = dest / "maintenance" / module.name
+        check(f"deployed: maintenance/{module.name}",
+              deployed.is_file() and deployed.read_bytes() == module.read_bytes(), True)
+
     # env.template ne doit PAS voyager : il n'a plus d'objet une fois rendu,
     # et un operateur qui le trouve a cote du .env ne sait pas lequel fait foi.
     check("env.template non depose", (dest / "env.template").exists(), False)

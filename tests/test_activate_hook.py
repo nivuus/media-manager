@@ -222,15 +222,18 @@ def fake_subprocess(routes):
     return run
 
 
-def run_phase_with(routes, deploy_files=None):
+def run_phase_with(routes, deploy_files=None, inspect=None):
     """activate.run_phase() under a fake subprocess.run and a fake DEPLOY:
     (exit code, stderr).
 
     deploy_files pre-populates the scratch DEPLOY directory (relative path
     -> content), for a case that reaches the harvest/timers section — a
     failure case never does (it returns from the compose try/except first).
-    The two armed timers' unit files are always pre-created in the scratch
-    --root, so a success case's arm() calls have something to link to.
+    Every timer unit install ships (systemd/*.timer) is pre-created in the
+    scratch --root, as install leaves them: a success case's arm() calls
+    have something to link to, and so would a timer armed by mistake.
+    inspect, when given, is called with the scratch (deploy, root) paths
+    after the phase and before both are removed, to read what it left.
     stdout is captured too (emit() prints progress there) so a failing case
     does not spam this test's own output — only the assertions should.
     """
@@ -243,14 +246,16 @@ def run_phase_with(routes, deploy_files=None):
             full.write_text(content)
         units_dir = pathlib.Path(root) / "etc/systemd/system"
         units_dir.mkdir(parents=True)
-        for timer in activate.TIMERS:
-            (units_dir / timer).write_text("[Timer]\n")
+        for timer in (REPO / "systemd").glob("*.timer"):
+            (units_dir / timer.name).write_text("[Timer]\n")
 
         with mock.patch("subprocess.run", new=fake_subprocess(routes)), \
              mock.patch("sys.stderr", new=captured_stderr), \
              mock.patch("sys.stdout", new=io.StringIO()), \
              mock.patch.object(activate, "DEPLOY", deploy):
             code = activate.run_phase(root)
+        if inspect is not None:
+            inspect(pathlib.Path(deploy), pathlib.Path(root))
     return code, captured_stderr.getvalue()
 
 
@@ -325,6 +330,17 @@ check("up fails: stderr kept", "could not select device driver" in err, True)
 CONFIG_XML = ('<?xml version="1.0" encoding="utf-8"?>\n'
              '<Config><ApiKey>{}</ApiKey></Config>\n')
 UP_SUCCESS = ("docker", "compose", "up", "-d", "sonarr")
+left = {}
+
+
+def read_what_was_left(deploy, root):
+    """The .env the harvest wrote, and each timers.target.wants entry -> its link target."""
+    left["env"] = (deploy / ".env").read_text()
+    wants = root / "etc/systemd/system/timers.target.wants"
+    left["armed"] = {entry.name: str(entry.readlink()) if entry.is_symlink() else None
+                     for entry in wants.iterdir()}
+
+
 code, err = run_phase_with({
     VERSION: completed(VERSION),
     CONFIG: completed(CONFIG, stdout="radarr\nsonarr\n"),
@@ -340,9 +356,21 @@ code, err = run_phase_with({
     "radarr/config.xml": CONFIG_XML.format("radarr-key"),
     "sonarr/config.xml": CONFIG_XML.format("sonarr-key"),
     "prowlarr/config.xml": CONFIG_XML.format("prowlarr-key"),
-})
+}, inspect=read_what_was_left)
 check("success path: exit status", code, 0)
 check("success path: no stderr", err, "")
+check("success path: harvested keys written to the .env", left.get("env"),
+      "RADARR_API_KEY=radarr-key\nSONARR_API_KEY=sonarr-key\n"
+      "PROWLARR_API_KEY=prowlarr-key\n")
+# Exactly these two links: the cleanup timer's unit is there to link to,
+# and is still never armed.
+check("success path: reset-error and update-wanted armed, cleanup not",
+      left.get("armed"), {
+          "media-manager-reset-error.timer":
+              "/etc/systemd/system/media-manager-reset-error.timer",
+          "media-manager-update-wanted.timer":
+              "/etc/systemd/system/media-manager-update-wanted.timer",
+      })
 
 if failures:
     print("\n".join(failures))
