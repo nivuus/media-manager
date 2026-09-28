@@ -16,8 +16,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from maintenance import run_log
-from maintenance.arr_api import (ApiError, Failures, call, exit_status,
-                                 get_json, missing_api_keys, object_list,
+from maintenance.arr_api import (ApiError, Failures, call, check_api_keys,
+                                 exit_status, get_page, parse_time,
                                  radarr_instances, sonarr_instances)
 
 log = logging.getLogger(__name__)
@@ -55,35 +55,13 @@ def fetch_missing(instance):
     records = []
     page = 1
     while True:
-        payload = get_json(instance, 'wanted/missing',
-                           params={'page': page, 'pageSize': 500, 'monitored': True})
-        batch = object_list(payload.get('records') if isinstance(payload, dict) else None,
-                            "the 'records' of the wanted/missing answer")
+        batch, total = get_page(instance, 'wanted/missing',
+                                params={'page': page, 'pageSize': 500, 'monitored': True})
         records.extend(batch)
-        total = payload.get('totalRecords')
-        if not isinstance(total, int):
-            raise ApiError("the wanted/missing answer has no 'totalRecords' count")
         if not batch or len(records) >= total:
             break
         page += 1
     return records
-
-
-def _parse_iso(raw):
-    """Parse an ISO 8601 timestamp as the API sends it, or None.
-
-    Radarr hands back naive dates for some release types while Sonarr always
-    sends a 'Z' suffix, and comparing those as text would silently get the
-    ordering wrong around the current instant, so every date is parsed and
-    normalised to an aware UTC datetime.
-    """
-    if not raw:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def release_date(record, kind):
@@ -93,12 +71,12 @@ def release_date(record, kind):
     else:
         raw = (record.get('digitalRelease') or record.get('physicalRelease')
               or record.get('inCinemas'))
-    return _parse_iso(raw)
+    return parse_time(raw)
 
 
 def last_search_time(record):
     """When Radarr/Sonarr last searched this item, or None: the same field on both apps."""
-    return _parse_iso(record.get('lastSearchTime'))
+    return parse_time(record.get('lastSearchTime'))
 
 
 def is_searchable(record, kind, now=None):
@@ -199,10 +177,7 @@ def search_instance(instance, failures, now):
 def run(environ):
     """One run: search a bounded, deterministic slice of each instance's missing list."""
     instances = sonarr_instances(environ) + radarr_instances(environ)
-    missing_keys = missing_api_keys(instances)
-    if missing_keys:
-        log.error('Missing API keys in environment: %s. Configure them in the '
-                  '.env file or as environment variables.', ', '.join(missing_keys))
+    if not check_api_keys(instances):
         return 1
 
     failures = Failures()

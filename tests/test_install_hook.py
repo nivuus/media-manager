@@ -16,13 +16,17 @@ in hooks/safe_copy.py and is tested in tests/test_safe_copy.py instead.
 
 Run: python3 tests/test_install_hook.py
 """
-import json
 import os
 import pathlib
 import stat
 import subprocess
 import sys
 import tempfile
+
+# Keep the test run from leaving a __pycache__ in tests/.
+sys.dont_write_bytecode = True
+
+from hook_fixtures import ANSWERS, context, fake_group_file  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 HOOK = REPO / "hooks" / "install.py"
@@ -36,27 +40,10 @@ def check(label, got, want):
         failures.append(f"{label}: got {got!r}, want {want!r}")
 
 
-def context(answers):
-    return json.dumps({
-        "package": {"name": "media-manager", "version": "1.0.0",
-                    "root": str(REPO)},
-        "hw": {"gpus": [{"slot": "00:02.0", "vendor": "intel",
-                         "discrete": False}]},
-        "answers": answers,
-    })
-
-
 def run(root, answers):
     return subprocess.run(
         [sys.executable, str(HOOK), "--phase", "install", "--root", root],
         input=context(answers), capture_output=True, text=True, cwd=str(REPO))
-
-
-def fake_group_file(root):
-    """Une cible ou render vaut 106, pas la valeur par defaut 105."""
-    path = pathlib.Path(root) / "etc" / "group"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("root:x:0:\nvideo:x:44:\nrender:x:106:\n")
 
 
 def env_values(path):
@@ -68,15 +55,6 @@ def env_values(path):
             values[key.strip()] = value.strip()
     return values
 
-
-ANSWERS = {
-    "media_root": "/srv/media",
-    "transcode_dir": "/srv/transcode",
-    "timezone": "Europe/Paris",
-    "nvenc_node": True,
-    "usenet": False,
-    "plex_claim": "claim-abc",
-}
 
 # --- Installation nominale ------------------------------------------------
 with tempfile.TemporaryDirectory() as root:

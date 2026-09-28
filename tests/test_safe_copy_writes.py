@@ -13,12 +13,9 @@ simulate the thing under test.
 
 Run: python3 tests/test_safe_copy_writes.py
 """
-import json
 import os
 import pathlib
-import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 from unittest import mock
@@ -37,65 +34,11 @@ def check(label, got, want):
         failures.append(f"{label}: got {got!r}, want {want!r}")
 
 
-# Same small fixtures as tests/test_safe_copy.py, duplicated rather than
-# imported: these are standalone scripts, not guarded modules, so importing
-# one from the other would re-run its entire suite as a side effect.
-ANSWERS = {
-    "media_root": "/srv/media",
-    "transcode_dir": "/srv/transcode",
-    "timezone": "Europe/Paris",
-    "nvenc_node": True,
-    "usenet": False,
-    "plex_claim": "claim-abc",
-}
+# Keep the test run from leaving a __pycache__ in tests/.
+sys.dont_write_bytecode = True
 
-
-def context(answers):
-    return json.dumps({
-        "package": {"name": "media-manager", "version": "1.0.0",
-                    "root": str(REPO)},
-        "hw": {"gpus": [{"slot": "00:02.0", "vendor": "intel",
-                         "discrete": False}]},
-        "answers": answers,
-    })
-
-
-def fake_group_file(root):
-    """Une cible ou render vaut 106, pas la valeur par defaut 105."""
-    path = pathlib.Path(root) / "etc" / "group"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("root:x:0:\nvideo:x:44:\nrender:x:106:\n")
-
-
-def make_stack_skeleton(pkg):
-    """A minimal fake package directory: hooks/, systemd/, and a tiny stack/."""
-    shutil.copytree(REPO / "hooks", pkg / "hooks")
-    shutil.copytree(REPO / "systemd", pkg / "systemd")
-    (pkg / "stack").mkdir()
-    shutil.copy2(REPO / "stack" / "env.template", pkg / "stack" / "env.template")
-    (pkg / "stack" / "docker-compose.yml").write_text("services: {}\n")
-
-
-def run_pkg(pkg, root, env=None):
-    """Run a fake package's own install.py against --root root."""
-    return subprocess.run(
-        [sys.executable, str(pkg / "hooks" / "install.py"),
-         "--phase", "install", "--root", root],
-        input=context(ANSWERS), capture_output=True, text=True, cwd=str(pkg),
-        env=env)
-
-
-def git_commit_tracked(pkg, *tracked_paths):
-    """git init + add + commit exactly the given paths, inside pkg."""
-    def git(*args):
-        proc = subprocess.run(["git", *args], cwd=str(pkg),
-                              capture_output=True, text=True)
-        assert proc.returncode == 0, proc.stderr
-
-    git("init", "-q")
-    git("add", *tracked_paths)
-    git("-c", "user.email=t@t.test", "-c", "user.name=t",
-        "commit", "-q", "-m", "tracked files")
+from hook_fixtures import (fake_group_file, git_commit_tracked,  # noqa: E402
+                           make_stack_skeleton, run_pkg)
 
 
 # --- Root writes never follow symlinks: a hijacked ancestor directory -----

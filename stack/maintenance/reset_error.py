@@ -19,8 +19,8 @@ import logging
 from datetime import datetime, timezone
 
 from maintenance import run_log
-from maintenance.arr_api import (ApiError, Failures, exit_status,
-                                 missing_api_keys, radarr_instances,
+from maintenance.arr_api import (ApiError, Failures, check_api_keys,
+                                 exit_status, radarr_instances,
                                  sonarr_instances)
 from maintenance.dead_metadata import remove_dead_entries
 from maintenance.downloads_purge import (download_present, names_under,
@@ -182,10 +182,7 @@ def downloads_listing(environ, downloads_dir, failures):
 def run(environ):
     """One clean-up run against the instances configured in `environ`."""
     instances = radarr_instances(environ) + sonarr_instances(environ)
-    missing = missing_api_keys(instances)
-    if missing:
-        log.error('Missing API keys in environment: %s. Configure them in the '
-                  '.env file or as environment variables.', ', '.join(missing))
+    if not check_api_keys(instances):
         return 1
 
     failures = Failures()

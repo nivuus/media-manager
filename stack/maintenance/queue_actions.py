@@ -4,7 +4,7 @@ The actions are the manual import of a finished download and the removal of
 a queue row, with or without blocklisting its release. Every API failure
 raises ApiError: the caller records it.
 """
-from maintenance.arr_api import ApiError, call, get_json, get_json_list, object_list
+from maintenance.arr_api import ApiError, call, get_json_list, get_page
 
 # The manual-import lookup makes Radarr/Sonarr scan the download and ffprobe
 # every file in it: allow it longer than an ordinary call.
@@ -39,12 +39,7 @@ def fetch_queue(instance):
         params['includeUnknownMovieItems'] = True
     else:
         params['includeUnknownSeriesItems'] = True
-    queue = get_json(instance, 'queue', params=params)
-    records = object_list(queue.get('records') if isinstance(queue, dict) else None,
-                          "the 'records' of the queue answer")
-    total = queue.get('totalRecords')
-    if not isinstance(total, int):
-        raise ApiError("the queue answer has no 'totalRecords' count")
+    records, total = get_page(instance, 'queue', params=params)
     if total > len(records):
         raise ApiError(f'only {len(records)} of the {total} queue rows were returned')
     return records

@@ -5,7 +5,7 @@ is on disk go in, an action comes out. No I/O here; the caller establishes
 presence from the Downloads directory, and queue_actions.py and
 reset_error.py carry the actions out.
 """
-from datetime import datetime, timezone
+from maintenance.arr_api import parse_time
 
 # Queue items older than this that still have not imported are considered dead
 # in the download client (Alldebrid serves over HTTPS: nothing legitimate takes
@@ -81,18 +81,10 @@ def item_texts(item):
 
 def item_age_hours(item, now):
     """Age of a queue item in hours at `now`, or None if 'added' is unusable."""
-    added = item.get('added')
-    if not added:
+    added = parse_time(item.get('added'))
+    if added is None:
         return None
-    try:
-        added_dt = datetime.fromisoformat(str(added).replace('Z', '+00:00'))
-    except ValueError:
-        return None
-    if added_dt.tzinfo is None:
-        # Radarr/Sonarr store UTC: a value without an offset is UTC, never
-        # local time (which astimezone() would silently assume).
-        added_dt = added_dt.replace(tzinfo=timezone.utc)
-    return (now - added_dt).total_seconds() / 3600
+    return (now - added).total_seconds() / 3600
 
 
 def classify_item(item, now, download_present=None):

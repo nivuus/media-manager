@@ -11,6 +11,7 @@ failed and OnFailure= can alert.
 """
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -63,10 +64,18 @@ def sonarr_instances(environ):
     ]
 
 
-def missing_api_keys(instances):
-    """The environment variables whose API key is empty, in instance order."""
-    return [instance.api_key_variable for instance in instances
-            if not instance.api_key]
+def check_api_keys(instances):
+    """Whether every instance has its API key; logs the missing variables when not.
+
+    Checked before any call: without its key every call to an instance
+    fails, so a run stops there and exits 1 instead.
+    """
+    missing = [instance.api_key_variable for instance in instances
+               if not instance.api_key]
+    if missing:
+        log.error('Missing API keys in environment: %s. Configure them in the '
+                  '.env file or as environment variables.', ', '.join(missing))
+    return not missing
 
 
 class ApiError(Exception):
@@ -137,6 +146,41 @@ def get_json_list(instance, path, *, params=None, timeout=DEFAULT_TIMEOUT):
     """
     return object_list(get_json(instance, path, params=params, timeout=timeout),
                        f'the answer to GET /api/v3/{path}')
+
+
+def get_page(instance, path, *, params=None, timeout=DEFAULT_TIMEOUT):
+    """GET one page of a paged collection; return its (records, totalRecords).
+
+    Raises ApiError as get_json() does, when the answer is not an object or
+    its 'records' is not a list of objects, and when its 'totalRecords' is
+    not an integer: that count is how the caller knows whether it holds
+    every row, and an answer without it cannot say.
+    """
+    page = get_json(instance, path, params=params, timeout=timeout)
+    records = object_list(page.get('records') if isinstance(page, dict) else None,
+                          f"the 'records' of the {path} answer")
+    total = page.get('totalRecords')
+    if not isinstance(total, int):
+        raise ApiError(f"the {path} answer has no 'totalRecords' count")
+    return records, total
+
+
+def parse_time(raw):
+    """A timestamp as Radarr/Sonarr send it, as an aware UTC datetime; None when unusable.
+
+    ISO 8601 with a 'Z' suffix or an offset, or naive: Radarr sends naive
+    dates for some release types, and both apps store UTC, so a naive value
+    is UTC, never local time (which astimezone() would silently assume).
+    Comparing the raw text instead would get the order wrong around the
+    current instant.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 class Failures:
