@@ -61,7 +61,7 @@ for name, service in main["services"].items():
     check(f"{name}: aucun group_add dans le fichier principal",
           "group_add" in service, False)
 
-# La surcouche les monte, pour exactement les quatre services concernes.
+# La surcouche les monte, pour exactement les trois services concernes.
 check("services de la surcouche QSV",
       sorted(qsv["services"]), sorted(QSV_SERVICES))
 for name in QSV_SERVICES:
