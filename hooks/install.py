@@ -170,12 +170,18 @@ def _is_our_dropin(path):
     the hook). Any other content at the path — an operator's drop-in for a
     different notifier, most likely — is left alone: this is provenance, not
     "the path is ours because we chose the name."
+
+    Read and compared as bytes, never as decoded text: a text-mode open()
+    uses universal newlines, which would silently turn a CRLF copy of our
+    content into a match (and get it deleted), and raises UnicodeDecodeError
+    — uncaught here, since sync_failure_dropins runs after this hook's own
+    try/except block — on the first non-UTF-8 byte in an unrelated file.
     """
     if os.path.islink(path) or not os.path.isfile(path):
         return False
     try:
-        with open(path) as fh:
-            return fh.read() == FAILURE_DROPIN_CONTENT
+        with open(path, "rb") as fh:
+            return fh.read() == FAILURE_DROPIN_CONTENT.encode()
     except OSError:
         return False
 

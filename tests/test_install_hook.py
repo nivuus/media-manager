@@ -332,6 +332,39 @@ with tempfile.TemporaryDirectory() as root:
     check("directory in the way: contents untouched",
           (as_dir / "nested.txt").read_text(), "unexpected layout\n")
 
+# --- Drop-in provenance compares bytes, not decoded text (fix round 2, item D)
+# _is_our_dropin used to open() in text mode: a non-UTF-8 byte anywhere in the
+# file raised UnicodeDecodeError (uncaught -- sync_failure_dropins runs after
+# the hook's own try/except block, past the .env and the units already
+# written), and universal newlines silently turned a CRLF copy of our content
+# into a match, deleting an operator's file that was never byte-identical.
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    other = dropin_path(root, "media-manager-reset-error.service")
+    other.parent.mkdir(parents=True)
+    latin1_content = "# commentaire, été généré ailleurs\n".encode("latin-1")
+    other.write_bytes(latin1_content)
+
+    proc = run(root, ANSWERS)
+    check("non-UTF-8 dropin: exit status (no crash)", proc.returncode, 0)
+    check("non-UTF-8 dropin: no traceback",
+          "UnicodeDecodeError" in proc.stderr, False)
+    check("non-UTF-8 dropin: content survives",
+          other.read_bytes(), latin1_content)
+
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    crlf = dropin_path(root, "media-manager-update-wanted.service")
+    crlf.parent.mkdir(parents=True)
+    crlf_content = DROPIN_CONTENT.replace("\n", "\r\n").encode()
+    crlf.write_bytes(crlf_content)
+
+    proc = run(root, ANSWERS)
+    check("CRLF dropin: exit status", proc.returncode, 0)
+    check("CRLF dropin: survives (not byte-identical to ours)",
+          crlf.exists(), True)
+    check("CRLF dropin: bytes unchanged", crlf.read_bytes(), crlf_content)
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)
