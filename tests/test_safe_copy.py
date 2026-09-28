@@ -152,6 +152,34 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     check("archive export: file deployed",
           (dest / "docker-compose.yml").is_file(), True)
 
+# --- Export mode refuses a symlinked directory, not silently skips it -----
+# (fix round 2, item C). os.walk(followlinks=False) still lists a symlinked
+# directory in dirnames, just without descending into it — left alone, that
+# makes an export "succeed" with the content behind the symlink silently
+# missing, contradicting install.py's own rule 4 (checkout mode already
+# refuses a symlinked SOURCE FILE outright; a symlinked source DIRECTORY in
+# export mode must be refused the same way, not skipped).
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    elsewhere = pkg / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "config.xml").write_text("<Config/>\n")
+    (pkg / "stack" / "radarr").symlink_to(elsewhere)
+    # No .git anywhere: an export, exactly like the plain archive case above.
+    fake_group_file(root)
+
+    proc = run_pkg(pkg, root)
+    check("symlinked export directory: exit status", proc.returncode, 1)
+    check("symlinked export directory: clean message",
+          proc.stderr.startswith("media-manager install:"), True)
+    check("symlinked export directory: directory named",
+          "radarr" in proc.stderr, True)
+    check("symlinked export directory: no traceback",
+          "Traceback" in proc.stderr, False)
+    check("symlinked export directory: nothing deployed at all",
+          (pathlib.Path(root) / DEST_REL).exists(), False)
+
 # --- Never copy a .env, in EITHER mode (fix round 1, item 2) ---------------
 # Neither mode excluded it before: a force-added stack/.env (checkout) or a
 # stack/.env sitting in an export's working tree overwrote the live .env in
