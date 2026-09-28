@@ -4,7 +4,8 @@
 stdout is what the journal keeps. When the unit declares LogsDirectory=,
 systemd creates the directory and passes it as LOGS_DIRECTORY; the scripts
 then also write a file there that outlives the journal's retention, rotated
-so that it cannot fill the disk.
+so that it cannot fill the disk. A crash lands there too, traceback
+included: reset-error sets the log up before anything else can fail.
 
 Run: python3 tests/test_run_log.py
 """
@@ -22,7 +23,7 @@ sys.dont_write_bytecode = True
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "stack"))
 
-from maintenance import run_log  # noqa: E402
+from maintenance import reset_error, run_log  # noqa: E402
 
 failures = []
 
@@ -99,6 +100,40 @@ with tempfile.TemporaryDirectory() as tmp:
     check("rotation: five backups kept",
           sorted(p.name for p in directory.iterdir()),
           ["reset-error.log"] + [f"reset-error.log.{n}" for n in range(1, 6)])
+
+# --- A crash reaches the file, traceback included -------------------------------
+def crash(target, run):
+    """reset_error.main() with `target` raising; returns (exit status, file text).
+
+    `run` stands in for reset_error.run unless `target` is run itself.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        with mock.patch.dict(os.environ, {"LOGS_DIRECTORY": tmp}), \
+                mock.patch("sys.stdout", new=io.StringIO()), \
+                mock.patch("maintenance.reset_error.load_environment"), \
+                mock.patch("maintenance.reset_error.run", new=run), \
+                mock.patch(target, side_effect=RuntimeError("queue exploded")):
+            try:
+                code = reset_error.main()
+            except Exception as error:  # a crash fails this case, not the whole file
+                code = f"raised {error!r}"
+        tear_down()
+        log_file = pathlib.Path(tmp) / "reset-error.log"
+        return code, log_file.read_text() if log_file.is_file() else ""
+
+
+for label, target in [("run", "maintenance.reset_error.run"),
+                      ("environment", "maintenance.reset_error.load_environment")]:
+    run = mock.Mock()
+    code, text = crash(target, run)
+    check(f"crash in {label}: exit status", code, 1)
+    check(f"crash in {label}: traceback in the file",
+          "Traceback (most recent call last)" in text, True)
+    check(f"crash in {label}: error in the file",
+          "RuntimeError: queue exploded" in text, True)
+    if label == "environment":
+        # Nothing goes on after an unexpected exception.
+        check("crash in environment: no run after it", run.called, False)
 
 if failures:
     print("\n".join(failures))

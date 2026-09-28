@@ -230,6 +230,13 @@ def exit_status(failures):
 
 
 def main():
-    load_environment()
+    """The unit's entry point. The log comes first, so that even a crash reaches its file."""
     run_log.setup('reset-error.log')
-    return run(os.environ)
+    try:
+        load_environment()
+        return run(os.environ)
+    except Exception:
+        # Unexpected, so nothing is known to be safe: keep the traceback
+        # where it outlives the journal, and stop with the unit failed.
+        log.exception('reset-error crashed')
+        return 1
