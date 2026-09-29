@@ -147,16 +147,10 @@ check("ordre conserve",
       activate.services_to_start(DECLARED, ["tdarr"]),
       ["radarr", "sonarr", "tdarr-node", "tdarr-node-nvenc"])
 
-# --- media-manager-cleanup.timer is never armed (item 2, audit H2) --------
-# media_cleanup.py over-deletes and ranks re-requested titles first; its
-# timer is disabled on the reference host pending a replacement. activate
-# must not arm it itself under any condition — the unit files are still
-# shipped (install.py) so an operator can run it by hand, or arm it
-# deliberately. The two other timers keep today's behaviour: armed
-# unconditionally.
-check("cleanup timer is never armed",
-      "media-manager-cleanup.timer" in activate.TIMERS, False)
-check("the two other timers are armed",
+# --- The two maintenance timers are armed unconditionally ----------------
+# media-manager-cleanup.timer is gone: Maintainerr replaced media_cleanup.py,
+# and install.py retires the unit (hooks/retired.py).
+check("the maintenance timers are armed",
       activate.TIMERS,
       ["media-manager-reset-error.timer", "media-manager-update-wanted.timer"])
 
@@ -164,19 +158,19 @@ check("the two other timers are armed",
 with tempfile.TemporaryDirectory() as root:
     units = pathlib.Path(root) / "etc/systemd/system"
     units.mkdir(parents=True)
-    (units / "media-manager-cleanup.timer").write_text("[Timer]\n")
+    (units / "media-manager-reset-error.timer").write_text("[Timer]\n")
 
-    activate.arm(root, "media-manager-cleanup.timer", "timers.target.wants")
-    link = units / "timers.target.wants" / "media-manager-cleanup.timer"
+    activate.arm(root, "media-manager-reset-error.timer", "timers.target.wants")
+    link = units / "timers.target.wants" / "media-manager-reset-error.timer"
     check("lien cree", link.is_symlink(), True)
     # La cible est un chemin ABSOLU dans l'espace de noms du systeme demarre,
     # pas dans la racine jetable : systemd le resout apres le redemarrage,
     # quand cette racine EST /.
     check("cible absolue", link.readlink().as_posix(),
-          "/etc/systemd/system/media-manager-cleanup.timer")
+          "/etc/systemd/system/media-manager-reset-error.timer")
 
     # Idempotent : rejouer la phase ne doit pas echouer.
-    activate.arm(root, "media-manager-cleanup.timer", "timers.target.wants")
+    activate.arm(root, "media-manager-reset-error.timer", "timers.target.wants")
     check("idempotent", link.is_symlink(), True)
 
     # Un fichier ordinaire a la place du lien est le bug, pas un etat a
@@ -185,7 +179,7 @@ with tempfile.TemporaryDirectory() as root:
     # sur cet hote.
     link.unlink()
     link.write_text("pas un lien\n")
-    activate.arm(root, "media-manager-cleanup.timer", "timers.target.wants")
+    activate.arm(root, "media-manager-reset-error.timer", "timers.target.wants")
     check("fichier ordinaire remplace", link.is_symlink(), True)
 
     # Une unite absente leve : un lien pendant se lit comme « armee » alors
@@ -362,9 +356,8 @@ check("success path: no stderr", err, "")
 check("success path: harvested keys written to the .env", left.get("env"),
       "RADARR_API_KEY=radarr-key\nSONARR_API_KEY=sonarr-key\n"
       "PROWLARR_API_KEY=prowlarr-key\n")
-# Exactly these two links: the cleanup timer's unit is there to link to,
-# and is still never armed.
-check("success path: reset-error and update-wanted armed, cleanup not",
+# Exactly these two links.
+check("success path: reset-error and update-wanted armed",
       left.get("armed"), {
           "media-manager-reset-error.timer":
               "/etc/systemd/system/media-manager-reset-error.timer",

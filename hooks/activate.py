@@ -38,7 +38,7 @@ docker command does not exist at all.
 2. HARVEST THE API KEYS. They do not exist yet at wizard time — each service
    generates its own on first start, inside its config volume's config.xml.
    Without this harvest, reset-error and update-wanted (the two timers this
-   phase arms — see the TIMERS comment below on cleanup) would run
+   phase arms) would run
    indefinitely against an empty key: armed, announced, and silently inert.
    Only Radarr, Sonarr and Prowlarr can be harvested this way; Bazarr,
    Tautulli and Seerr keep theirs elsewhere and stay to be filled in by
@@ -74,11 +74,8 @@ UNIT_DIR = "etc/systemd/system"
 DOCKER_REQUIRED_MSG = ("Docker Engine with the compose v2 plugin is required "
                        "(enable the installer's docker feature)")
 
-# media-manager-cleanup.timer is deliberately NOT armed here (audit H2):
-# media_cleanup.py over-deletes and ranks re-requested titles first, and the
-# unit is disabled on the reference host pending a replacement. Its unit
-# files are still shipped by install.py, so an operator can still run it by
-# hand, or arm it deliberately, once the flow is fixed.
+# Disk cleanup is not a timer any more: Maintainerr runs it (see
+# stack/docker-compose.yml), and install.py retires the old cleanup units.
 TIMERS = [
     "media-manager-reset-error.timer",
     "media-manager-update-wanted.timer",
