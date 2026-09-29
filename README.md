@@ -64,8 +64,8 @@ existing values and comments are left alone.
 | `nivuus-package.yaml` | The manifest. `tier: userspace`, no `claims`, no `requires` |
 | `wizard.yaml` | The six questions the portal asks |
 | `hooks/` | `install.py`, `activate.py` and their helpers (`data_dirs.py` creates the data directory of services that do not run as root) — stdlib only, they run on a minimal Debian |
-| `stack/` | **The deployment directory, byte for byte.** Compose files, the three maintenance scripts (two are thin wrappers around `stack/maintenance/`), the Tdarr assets |
-| `systemd/` | The three service/timer pairs that replace the crontab |
+| `stack/` | **The deployment directory, byte for byte.** Compose files, the two maintenance scripts (thin wrappers around `stack/maintenance/`), the Tdarr assets |
+| `systemd/` | The two service/timer pairs that replace the crontab |
 | `tests/` | 19 standalone suites, run by `make test` |
 
 `stack/` being the deployment directory verbatim is what spares the `install`
@@ -98,27 +98,12 @@ the space used twice until the 24h purge.
 
 ## Maintenance
 
-Three systemd timers are shipped by the package; `activate` arms two of them:
+Two systemd timers are shipped by the package, and `activate` arms both:
 
-| Unit | Time | Armed by `activate` | What it does |
-|---|---|---|---|
-| `media-manager-reset-error.timer` | 06:00 | yes | Clears failed downloads, imports the completed-but-unimported ones |
-| `media-manager-update-wanted.timer` | 07:00 | yes | Searches a bounded, rotating slice of the missing backlog |
-| `media-manager-cleanup.timer` | 08:00 | no | Frees disk space, least-watched first, using Tautulli data |
-
-`media-manager-cleanup.timer` is **deliberately left unarmed** — disabled on
-the reference host since 2026-09-28, pending a Maintainerr pilot to replace
-it. `media_cleanup.py` has known defects: it can overshoot its free-space
-threshold (its post-delete check re-reads real disk usage right away, before
-Radarr/Sonarr's own file deletion is necessarily reflected on disk); a
-re-requested title is ranked first for deletion again (Tautulli watch data is
-keyed by title/year and outlives the deletion, so a freshly re-downloaded
-title inherits its old watch date and looks stale immediately); its
-watch-history match is done on the raw title text, so a Plex library using
-localised titles never lines up with Radarr/Sonarr's own title; and it
-carries on with partial or empty data when Tautulli or an `*arr` instance is
-unreachable, instead of stopping. Run it by hand only, and always start with
-`--dry-run` (see below).
+| Unit | Time | What it does |
+|---|---|---|
+| `media-manager-reset-error.timer` | 06:00 | Clears failed downloads, imports the completed-but-unimported ones |
+| `media-manager-update-wanted.timer` | 07:00 | Searches a bounded, rotating slice of the missing backlog |
 
 ```bash
 systemctl list-timers 'media-manager-*'
@@ -126,21 +111,16 @@ systemctl start media-manager-reset-error.service   # run one now
 journalctl -u media-manager-reset-error.service -n 50
 ```
 
-The scripts also run by hand from the deployment directory:
-
-```bash
-cd /opt/nivuus/media-manager
-python3 media_cleanup.py --status        # disk status
-python3 media_cleanup.py --dry-run       # simulate
-python3 media_cleanup.py --threshold 15  # custom threshold (15% free)
-```
+Disk cleanup is done by **Maintainerr**, with rules tiered on the free space
+of `/data` (see CLAUDE.md, "Disk Cleanup"). `media_cleanup.py` and its timer
+were retired; installing this release removes them from the host.
 
 ## Services
 
 | Service | Port(s) | Description |
 |---|---|---|
 | **Seerr** | 5055 | Request portal (localhost only) |
-| **Maintainerr** | 6246 | Rule-based media cleanup, piloted to replace `media_cleanup.py` (localhost only, no authentication) |
+| **Maintainerr** | 6246 | Rule-based media cleanup, tiered on free disk space (localhost only, no authentication) |
 | **Prowlarr** | 9696 | Indexer manager |
 | **FlareSolverr** | — | Cloudflare bypass for indexers |
 | **RDTClient** | 6500 | AllDebrid download client |

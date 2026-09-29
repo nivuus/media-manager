@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory() as root:
 
     # La pile entiere a ete deposee, y compris les assets Tdarr.
     for rel in ("docker-compose.yml", "docker-compose.qsv.yml",
-                "reset-error.py", "update_wanted.py", "media_cleanup.py",
+                "reset-error.py", "update_wanted.py",
                 "tdarr/flows/OLED4K_norm_v6.json",
                 "tdarr/bin/fetch-binaries.sh",
                 "scripts/tdarr/build_flow_v6.py"):
@@ -117,10 +117,10 @@ with tempfile.TemporaryDirectory() as root:
                       if os.path.isdir("/dev/dri") else "docker-compose.yml")
     check("COMPOSE_FILE", values["COMPOSE_FILE"], expected_files)
 
-    # Les six unites sont posees, en 0644 : une unite est une donnee, pas un
-    # programme.
+    # Les quatre unites sont posees, en 0644 : une unite est une donnee, pas
+    # un programme.
     units = pathlib.Path(root) / "etc/systemd/system"
-    for job in ("reset-error", "update-wanted", "cleanup"):
+    for job in ("reset-error", "update-wanted"):
         for kind in ("service", "timer"):
             unit = units / f"media-manager-{job}.{kind}"
             check(f"unite posee: {unit.name}", unit.is_file(), True)
@@ -212,7 +212,7 @@ with tempfile.TemporaryDirectory() as root:
     check("RENDER_GID par defaut", values["RENDER_GID"], "105")
 
 # --- OnFailure= drop-in: only when the host has systemd-failure-notify@ ----
-# The three deployed media-manager-*.service units carried a hand-added
+# The deployed media-manager-*.service units carried a hand-added
 # OnFailure=systemd-failure-notify@%n.service line on the reference host,
 # added by hand because a reinstall drops it. systemd-failure-notify@.service
 # belongs to the host, not to this package, so the drop-in must only
@@ -223,7 +223,6 @@ DROPIN_CONTENT = "[Unit]\nOnFailure=systemd-failure-notify@%n.service\n"
 MAINTENANCE_SERVICES = (
     "media-manager-reset-error.service",
     "media-manager-update-wanted.service",
-    "media-manager-cleanup.service",
 )
 
 
@@ -248,10 +247,9 @@ with tempfile.TemporaryDirectory() as root:
               path.is_file(), True)
         check(f"failure-notify present: drop-in content for {unit}",
               path.read_text(), DROPIN_CONTENT)
-    # Only the three .service units get a drop-in, never the .timer units.
+    # Only the .service units get a drop-in, never the .timer units.
     for unit in ("media-manager-reset-error.timer",
-                "media-manager-update-wanted.timer",
-                "media-manager-cleanup.timer"):
+                "media-manager-update-wanted.timer"):
         check(f"failure-notify present: no drop-in for {unit}",
               dropin_path(root, unit).exists(), False)
 
@@ -312,7 +310,7 @@ with tempfile.TemporaryDirectory() as root:
 
 with tempfile.TemporaryDirectory() as root:
     fake_group_file(root)
-    as_dir = dropin_path(root, "media-manager-cleanup.service")
+    as_dir = dropin_path(root, "media-manager-update-wanted.service")
     as_dir.mkdir(parents=True)
     (as_dir / "nested.txt").write_text("unexpected layout\n")
 

@@ -25,7 +25,6 @@ DEPLOY = "/opt/nivuus/media-manager"
 JOBS = {
     "reset-error": ("reset-error.py", "*-*-* 06:00:00"),
     "update-wanted": ("update_wanted.py", "*-*-* 07:00:00"),
-    "cleanup": ("media_cleanup.py", "*-*-* 08:00:00"),
 }
 
 failures = []
@@ -71,11 +70,6 @@ for job, (script, calendar) in JOBS.items():
           timer["Timer"]["Persistent"], "true")
     check(f"{job}: cible d'armement",
           timer["Install"]["WantedBy"], "timers.target")
-
-# Le nettoyage journalise, comme la ligne de crontab qu'il remplace.
-cleanup = load_unit(UNITS / "media-manager-cleanup.service")
-check("cleanup: journal conserve",
-      f"--log {DEPLOY}/cleanup.log" in cleanup["Service"]["ExecStart"], True)
 
 # reset-error and update-wanted keep a durable log: systemd creates
 # /var/log/media-manager from LogsDirectory= and hands it to the script as

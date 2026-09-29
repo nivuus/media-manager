@@ -210,8 +210,8 @@ services:
       options:
         max-size: 10m
 
-  # Rule-based media cleanup, replacing stack/media_cleanup.py. Piloted in a
-  # no-action mode first; the operator configures it through its API.
+  # Rule-based media cleanup (it replaced media_cleanup.py). Its rules live in
+  # its own database under ./maintainerr; see CLAUDE.md, "Disk Cleanup".
   # NO authentication on the UI or the API: localhost only, like Seerr.
   # No PUID/PGID handling in the image, it runs as the compose `user:`, so
   # ./maintainerr must belong to that user (the install hook creates it so).

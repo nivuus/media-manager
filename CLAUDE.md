@@ -37,15 +37,15 @@ Quatre conséquences qui priment sur tout le reste de ce fichier :
   sans privilège (la porte d'idempotence de la CI, uid 1001), le hook crée le
   répertoire, ne le change pas de propriétaire et le dit par un avertissement.
 
-Les chemins ont changé : le compose, les trois scripts de maintenance et les
+Les chemins ont changé : le compose, les deux scripts de maintenance et les
 assets Tdarr sont sous `stack/`. Le déploiement est `/opt/nivuus/media-manager`
 (et non plus `/opt/nivuus/MediaManager`).
 
-Les trois lignes de crontab sont remplacées par
-`media-manager-{reset-error,update-wanted,cleanup}.timer`, livrées par le
-package. Seuls `reset-error` et `update-wanted` sont armés par le hook
-`activate` : `cleanup` est livré mais volontairement pas armé — voir
-« Maintenance Scripts » pour ses défauts connus. Tests : `make test`.
+Les lignes de crontab sont remplacées par
+`media-manager-{reset-error,update-wanted}.timer`, livrées par le package et
+armées par le hook `activate`. L'ancien `cleanup` a été retiré au profit de
+Maintainerr ; le hook `install` supprime ce qu'une version précédente en
+avait posé (`hooks/retired.py`). Tests : `make test`.
 
 ## Essential Commands
 
@@ -147,29 +147,35 @@ same reason. Searching everything at once made the indexers answer 429 and
 Prowlarr disabled them for hours. Logs go to stdout and to
 `/var/log/media-manager/update-wanted.log`, same rotation as above.
 
-**Disk Cleanup** (`stack/media_cleanup.py`): frees space by deleting the
-least-recently-watched movies/series once free space drops under a
-threshold, using Tautulli's watch history. The package still ships
-`media-manager-cleanup.timer`, but `activate` deliberately does not arm it —
-disabled on the reference host since 2026-09-28, pending a Maintainerr pilot
-to replace it: **Maintainerr** (`maintainerr`, `127.0.0.1:6246`) is being
-piloted in a no-action mode, configured by the operator through its API. Until
-the pilot ends, `media_cleanup.py` stays shipped and unarmed; it goes away only
-once Maintainerr has proven itself.
+**Disk Cleanup** is **Maintainerr** (`maintainerr`, `127.0.0.1:6246`), not a
+script: `media_cleanup.py` and its timer were retired on 2026-09-29, and the
+install hook removes them from a host that still has them
+(`hooks/retired.py`). Its rules live in Maintainerr's own database
+(`./maintainerr`), not in this repository — read them with
+`curl -s localhost:6246/api/rules`.
 
-Known defects of `media_cleanup.py`: it can overshoot the threshold (its
-post-delete check re-reads real disk usage right away, before Radarr/Sonarr's
-own file deletion is necessarily reflected on disk); a re-requested title is
-ranked first for deletion again (Tautulli watch data is keyed by title/year
-and outlives the deletion, so a freshly re-downloaded title inherits its old
-watch date and looks stale immediately); the watch-history match is done on
-the raw title text, so a Plex library using localised titles never lines up
-with Radarr/Sonarr's own title; and it carries on with partial or empty data
-when Tautulli or an `*arr` instance is unreachable, instead of stopping. Run
-it by hand only, and always start with `--dry-run`:
-```bash
-python3 stack/media_cleanup.py --dry-run
-```
+Maintainerr has no ranking and no "stop once enough is freed": every title a
+rule matches enters its collection at once, and is deleted 14 days later. A
+single broad rule gated on free space would therefore delete ~5 TB the day
+the threshold is crossed. Hence two tiers per library, each gated on
+`diskspace_remaining_gb` of `/data`:
+
+| Tier | Collections | Free space under | Match |
+|---|---|---|---|
+| 1 | `Leaving soon – Films` / `– TV` | 835 GiB (5 %) | no view in 3 years, file / last episode older than 1 year |
+| 2 | `Leaving soon – Films (tier 2)` / `– TV (tier 2)` | 501 GiB (3 %) | no view in 1 year, file / last episode older than 180 days |
+
+"No view" is both Tautulli (a view counts from 50 % watched) and Plex
+(all users), since Tautulli has no history between 2023-07 and 2025-12.
+Action: delete (movie record + folder in Radarr, whole show in Sonarr), 14
+days of grace, Seerr requests left alone (Seerr's CSRF blocks Maintainerr's
+API-key calls). Rules run every 8 h, the deletion handler every 12 h; above
+both thresholds all four collections stay empty.
+
+**Always set the disk rule's path to `/data`** (`arrDiskPath`). Without one,
+Maintainerr sums the free space of every disk Radarr/Sonarr report — `/`,
+`/config` and `/data` — and sees ~2.5 TiB free when `/data` has 1.6 TiB, so
+the threshold would never be crossed.
 
 ## Architecture
 
@@ -401,11 +407,9 @@ version actually ran.
 - `stack/maintenance/update_wanted.py` (run through the `stack/update_wanted.py`
   wrapper): deterministic and stateless — do not bring back a state file;
   searches a bounded slice per run rather than the whole missing list
-- `stack/media_cleanup.py`: disk cleanup with Tautulli watch data correlation;
-  known defects, not armed by `activate` (see "Maintenance Scripts")
 - Radarr/Sonarr instances are still declared as lists —
-  `radarr_instances()`/`sonarr_instances()` in `stack/maintenance/arr_api.py`,
-  `RADARR_INSTANCES`/`SONARR_INSTANCES` in `media_cleanup.py` — even though
+  `radarr_instances()`/`sonarr_instances()` in `stack/maintenance/arr_api.py` —
+  even though
   there is one of each: adding an instance back stays a one-line change,
   every caller already loops
 

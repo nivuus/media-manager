@@ -46,6 +46,7 @@ import sys
 
 from atomic_env import write_env
 from data_dirs import ensure_data_dirs
+from retired import retire_stack_files, retire_units
 from safe_copy import copy_stack
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,7 +65,6 @@ TEMPLATE_NAME = "env.template"
 UNITS = [
     "media-manager-reset-error.service", "media-manager-reset-error.timer",
     "media-manager-update-wanted.service", "media-manager-update-wanted.timer",
-    "media-manager-cleanup.service", "media-manager-cleanup.timer",
 ]
 
 # systemd-failure-notify@.service belongs to the host, not to this package
@@ -221,9 +221,8 @@ def _is_our_dropin(path):
 def sync_failure_dropins(root):
     """Write or drop the OnFailure= alert drop-in for each maintenance service.
 
-    Only the three .service units get one (cleanup included: an operator who
-    runs it by hand still wants the alert) — never the .timer units, which
-    never fail themselves. When the host has no systemd-failure-notify@, a
+    Only the .service units get one — never the .timer units, which never
+    fail themselves. When the host has no systemd-failure-notify@, a
     drop-in a previous install left behind is removed — but only when it is
     still exactly that (see _is_our_dropin); nothing else at that path, and
     nothing else in that directory, is ever touched.
@@ -323,6 +322,9 @@ def install(root, answers):
     for unit in UNITS:
         place_unit(unit, unit_dir)
     sync_failure_dropins(root)
+    for path in (retire_units(unit_dir, FAILURE_DROPIN_NAME, _is_our_dropin)
+                 + retire_stack_files(dest)):
+        emit({"event": "progress", "pct": 90, "msg": f"Retired: {path}"})
 
     emit({"event": "done"})
 
