@@ -245,7 +245,7 @@ mount — il n'y a pas d'état Docker à perdre.
    `hooks/install.py --root /` en réutilisant le `.env` courant comme source des
    valeurs → retrait des trois lignes de cron, armement des timers →
    `compose up -d` → vérification des douze conteneurs.
-6. `PACKAGE_REPOS` documenté dans `installer/README.md` et `installer/CLAUDE.md`,
+6. `PACKAGE_REPOS` documenté dans `installer/README.md` et `installer/docs/claude/package-engine.md`,
    table des dépôts sibling mise à jour.
 
 ## Hors périmètre
@@ -258,7 +258,7 @@ mount — il n'y a pas d'état Docker à perdre.
 suppression est une décision distincte, prise après la bascule.
 
 **Le câblage du package dans le portail.** Le wizard web n'offre encore aucun
-package (lacune nommée dans `installer/CLAUDE.md`, 2026-08-27) : la sélection
+package (lacune nommée dans `installer/docs/claude/package-engine.md`, 2026-08-27) : la sélection
 passe par un `config.json` portant `packages: {"media-manager": {…}}`.
 media-manager sera offert par le portail en même temps que `console`, quand
 cette lacune sera comblée — ce n'est pas un travail propre à ce package.
