@@ -94,8 +94,16 @@ def paged(records, page_size):
     return answer
 
 
-def routes(radarr_missing=(), sonarr_missing=()):
+def queue_status(total):
+    """What /api/v3/queue/status answers."""
+    return reply(200, {"totalCount": total, "count": total, "unknownCount": 0,
+                       "errors": False, "warnings": False})
+
+
+def routes(radarr_missing=(), sonarr_missing=(), radarr_queued=0, sonarr_queued=0):
     return {
+        ("GET", f"{SONARR}/queue/status"): queue_status(sonarr_queued),
+        ("GET", f"{RADARR}/queue/status"): queue_status(radarr_queued),
         ("GET", f"{SONARR}/wanted/missing"): reply(200, missing_page(list(sonarr_missing))),
         ("GET", f"{RADARR}/wanted/missing"): reply(200, missing_page(list(radarr_missing))),
         ("POST", f"{SONARR}/command"):
@@ -236,6 +244,38 @@ no_keys = {"RADARR_URL": ENV["RADARR_URL"], "SONARR_URL": ENV["SONARR_URL"]}
 code, api, _ = run_module(routes(), environ=no_keys)
 check("missing keys: exit status", code, 1)
 check("missing keys: no calls made", api.calls, [])
+
+# --- Release grace: nothing searched within RELEASE_GRACE_HOURS of release --
+grace = timedelta(hours=update_wanted.RELEASE_GRACE_HOURS)
+check("grace: aired just inside the grace period is skipped",
+      update_wanted.is_searchable(
+          episode(7, aired=NOW - grace + timedelta(minutes=1)), "sonarr", now=NOW), False)
+check("grace: aired just past the grace period is searched",
+      update_wanted.is_searchable(
+          episode(8, aired=NOW - grace - timedelta(minutes=1)), "sonarr", now=NOW), True)
+
+# --- A long download queue: that instance is not searched this run --------
+code, api, _ = run_module(routes(
+    radarr_missing=[movie(1, released=days_ago(1))],
+    sonarr_missing=[episode(101, aired=days_ago(1))],
+    sonarr_queued=update_wanted.MAX_ACTIVE_QUEUE + 1,
+    radarr_queued=update_wanted.MAX_ACTIVE_QUEUE))
+check("long queue: not a failure", code, 0)
+check("long queue: that instance's missing list not even fetched",
+      api.made("GET", f"{SONARR}/wanted/missing"), [])
+check("long queue: nothing searched there", api.made("POST", f"{SONARR}/command"), [])
+check("queue at the threshold: still searched",
+      len(api.made("POST", f"{RADARR}/command")), 1)
+
+# An unreadable queue size is a failure, and that instance is not searched.
+table = routes(radarr_missing=[movie(1, released=days_ago(1))],
+               sonarr_missing=[episode(101, aired=days_ago(1))])
+table[("GET", f"{SONARR}/queue/status")] = reply(500, {"message": "boom"})
+code, api, _ = run_module(table)
+check("queue size unreadable: exit status", code, 1)
+check("queue size unreadable: not searched", api.made("POST", f"{SONARR}/command"), [])
+check("queue size unreadable: other instance still searched",
+      len(api.made("POST", f"{RADARR}/command")), 1)
 
 if failures:
     print("\n".join(failures))

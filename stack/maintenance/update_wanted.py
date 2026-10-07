@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from maintenance import run_log
 from maintenance.arr_api import (ApiError, Failures, call, check_api_keys,
-                                 exit_status, get_page, parse_time,
+                                 exit_status, get_json, get_page, parse_time,
                                  radarr_instances, sonarr_instances)
 
 log = logging.getLogger(__name__)
@@ -39,6 +39,15 @@ RECENT_WINDOW_DAYS = 30
 # Seconds between instances, so they don't hit the same indexers through
 # Prowlarr at the same second.
 DELAY_BETWEEN_INSTANCES = 120
+# An instance whose download queue already holds more rows than this is not
+# searched this run: every search result lands in that queue, and RDTClient
+# downloads at most 8 at once. Searching more only piles grabs up behind the
+# ones still waiting, and they are what the indexers' quota was spent on.
+MAX_ACTIVE_QUEUE = 20
+# Nothing is searched until this long after its release/air date: the first
+# releases of a fresh episode or movie take a few hours to reach the
+# indexers, and a search made before that is quota spent on a certain miss.
+RELEASE_GRACE_HOURS = 6
 
 
 def fetch_missing(instance):
@@ -80,13 +89,24 @@ def last_search_time(record):
 
 
 def is_searchable(record, kind, now=None):
-    """Skip what cannot possibly be found yet: nothing has been released.
+    """Skip what cannot possibly be found yet: not released, or released too recently.
 
     Searching an unreleased title every single day is pure indexer quota burnt
-    for a guaranteed zero result.
+    for a guaranteed zero result; so is one released less than
+    RELEASE_GRACE_HOURS ago, before its releases reach the indexers.
     """
     released = release_date(record, kind)
-    return released is not None and released <= (now or datetime.now(timezone.utc))
+    now = now or datetime.now(timezone.utc)
+    return released is not None and released <= now - timedelta(hours=RELEASE_GRACE_HOURS)
+
+
+def active_queue_size(instance):
+    """How many rows the instance's download queue holds; ApiError if unreadable."""
+    status = get_json(instance, 'queue/status')
+    total = status.get('totalCount') if isinstance(status, dict) else None
+    if not isinstance(total, int):
+        raise ApiError("the queue/status answer has no 'totalCount'")
+    return total
 
 
 def select_batch(records, kind, now=None):
@@ -141,8 +161,20 @@ def search_instance(instance, failures, now):
     """Fetch one instance's missing list and search the selected slice.
 
     Failures during the fetch or the search are recorded rather than raised:
-    the caller must still try every other instance.
+    the caller must still try every other instance. An instance whose queue
+    is already longer than MAX_ACTIVE_QUEUE is not searched; one whose queue
+    cannot be read is not searched either, and that is a failure.
     """
+    try:
+        queued = active_queue_size(instance)
+    except ApiError as error:
+        failures.record(f'[{instance}] cannot read the queue size, not searched', error)
+        return
+    if queued > MAX_ACTIVE_QUEUE:
+        log.warning('[%s] %d rows already in the download queue (more than %d): '
+                    'not searched this run.', instance, queued, MAX_ACTIVE_QUEUE)
+        return
+
     try:
         missing = fetch_missing(instance)
     except ApiError as error:
@@ -156,14 +188,15 @@ def search_instance(instance, failures, now):
     searchable = [r for r in missing if is_searchable(r, instance.kind, now)]
     skipped = len(missing) - len(searchable)
     if not searchable:
-        log.info('[%s] %d missing, none released/aired yet.', instance, len(missing))
+        log.info('[%s] %d missing, none released/aired more than %dh ago.',
+                 instance, len(missing), RELEASE_GRACE_HOURS)
         return
 
     recent, backlog = select_batch(searchable, instance.kind, now)
     selected = recent + backlog
-    log.info('[%s] %d missing (%d not yet released/aired) -> searching %d '
+    log.info('[%s] %d missing (%d not released/aired %dh ago yet) -> searching %d '
              '(%d recent < %d days, %d from the backlog).',
-             instance, len(missing), skipped, len(selected),
+             instance, len(missing), skipped, RELEASE_GRACE_HOURS, len(selected),
              len(recent), RECENT_WINDOW_DAYS, len(backlog))
 
     try:
