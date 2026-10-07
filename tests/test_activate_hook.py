@@ -22,13 +22,10 @@ fraichement demarre a genere casserait les trois scripts de maintenance.
 Run: python3 tests/test_activate_hook.py
 """
 import importlib.util
-import io
 import pathlib
 import stat
-import subprocess
 import sys
 import tempfile
-from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 # activate.py imports its sibling atomic_env.py the same way the deployed
@@ -36,6 +33,9 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 # because Python only puts a *directly run* script's own directory on
 # sys.path automatically. exec_module() here is not a direct run.
 sys.path.insert(0, str(REPO / "hooks"))
+sys.path.insert(0, str(REPO / "tests"))
+
+import activate_fakes  # noqa: E402
 
 spec = importlib.util.spec_from_file_location(
     "activate_hook", REPO / "hooks" / "activate.py")
@@ -199,63 +199,11 @@ with tempfile.TemporaryDirectory() as root:
 # /opt/nivuus/media-manager, and nothing here may ever touch it.
 
 
-def completed(argv, returncode=0, stdout="", stderr=""):
-    return subprocess.CompletedProcess(args=list(argv), returncode=returncode,
-                                       stdout=stdout, stderr=stderr)
+completed = activate_fakes.completed
+run_phase_with = activate_fakes.phase_runner(activate, REPO)
 
 
-def fake_subprocess(routes):
-    def run(argv, **kwargs):
-        key = tuple(argv)
-        if key not in routes:
-            raise AssertionError(f"unexpected subprocess call: {argv}")
-        answer = routes[key]
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
-    return run
-
-
-def run_phase_with(routes, deploy_files=None, inspect=None):
-    """activate.run_phase() under a fake subprocess.run and a fake DEPLOY:
-    (exit code, stderr).
-
-    deploy_files pre-populates the scratch DEPLOY directory (relative path
-    -> content), for a case that reaches the harvest/timers section — a
-    failure case never does (it returns from the compose try/except first).
-    Every timer unit install ships (systemd/*.timer) is pre-created in the
-    scratch --root, as install leaves them: a success case's arm() calls
-    have something to link to, and so would a timer armed by mistake.
-    inspect, when given, is called with the scratch (deploy, root) paths
-    after the phase and before both are removed, to read what it left.
-    stdout is captured too (emit() prints progress there) so a failing case
-    does not spam this test's own output — only the assertions should.
-    """
-    captured_stderr = io.StringIO()
-    with tempfile.TemporaryDirectory() as deploy, \
-         tempfile.TemporaryDirectory() as root:
-        for relpath, content in (deploy_files or {}).items():
-            full = pathlib.Path(deploy) / relpath
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(content)
-        units_dir = pathlib.Path(root) / "etc/systemd/system"
-        units_dir.mkdir(parents=True)
-        for timer in (REPO / "systemd").glob("*.timer"):
-            (units_dir / timer.name).write_text("[Timer]\n")
-
-        with mock.patch("subprocess.run", new=fake_subprocess(routes)), \
-             mock.patch("sys.stderr", new=captured_stderr), \
-             mock.patch("sys.stdout", new=io.StringIO()), \
-             mock.patch.object(activate, "DEPLOY", deploy):
-            code = activate.run_phase(root)
-        if inspect is not None:
-            inspect(pathlib.Path(deploy), pathlib.Path(root))
-    return code, captured_stderr.getvalue()
-
-
-VERSION = ("docker", "compose", "version")
-CONFIG = ("docker", "compose", "config", "--services")
-PS_A = ("docker", "compose", "ps", "-a", "--services")
+VERSION, CONFIG, PS_A = activate_fakes.VERSION, activate_fakes.CONFIG, activate_fakes.PS_A
 
 # Docker itself is not installed: subprocess.run() raises, it does not
 # return a non-zero completed process.
@@ -321,8 +269,7 @@ check("up fails: stderr kept", "could not select device driver" in err, True)
 # config.xml files are pre-filled so the harvest loop's `all(keys.values())`
 # is true on its first pass — otherwise it would sleep for real, in a loop
 # bounded by HARVEST_TIMEOUT (up to 600 s).
-CONFIG_XML = ('<?xml version="1.0" encoding="utf-8"?>\n'
-             '<Config><ApiKey>{}</ApiKey></Config>\n')
+CONFIG_XML = activate_fakes.CONFIG_XML
 UP_SUCCESS = ("docker", "compose", "up", "-d", "sonarr")
 left = {}
 

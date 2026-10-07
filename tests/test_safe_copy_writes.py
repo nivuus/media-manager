@@ -319,6 +319,40 @@ with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as
     check("temp-name swap: victim content unchanged",
           victim.read_text(), "victim original\n")
 
+# --- Deployed modes are git's, not the umask of the checkout --------------
+# Root's umask here is 027: a checkout made by root has 0640 files and 0750
+# directories, and copying those bits deployed Recyclarr's configuration
+# unreadable by the PUID:PGID it runs as. Git records 0644 or 0755 only.
+with tempfile.TemporaryDirectory() as fake_pkg, tempfile.TemporaryDirectory() as root:
+    pkg = pathlib.Path(fake_pkg)
+    make_stack_skeleton(pkg)
+    (pkg / "stack" / "tool" / "nested").mkdir(parents=True)
+    conf = pkg / "stack" / "tool" / "nested" / "conf.yml"
+    conf.write_text("a: 1\n")
+    script = pkg / "stack" / "run.py"
+    script.write_text("print()\n")
+    conf.chmod(0o640)
+    script.chmod(0o750)
+    git_commit_tracked(pkg, "stack/env.template", "stack/docker-compose.yml",
+                       "stack/tool/nested/conf.yml", "stack/run.py")
+    dest = pathlib.Path(root) / DEST_REL
+    dest.mkdir(parents=True)
+    old_umask = os.umask(0o077)
+    try:
+        safe_copy.copy_stack(str(pkg), str(pkg / "stack"), str(dest))
+    finally:
+        os.umask(old_umask)
+    mode = lambda p: stat.S_IMODE(p.stat().st_mode)  # noqa: E731
+    check("git mode: plain file 0644", mode(dest / "tool" / "nested" / "conf.yml"), 0o644)
+    check("git mode: executable 0755", mode(dest / "run.py"), 0o755)
+    check("git mode: new directories 0755",
+          (mode(dest / "tool"), mode(dest / "tool" / "nested")), (0o755, 0o755))
+
+    # An existing directory keeps its mode: it may be a data directory.
+    (dest / "tool").chmod(0o750)
+    safe_copy.copy_stack(str(pkg), str(pkg / "stack"), str(dest))
+    check("git mode: existing directory not re-stamped", mode(dest / "tool"), 0o750)
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)

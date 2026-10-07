@@ -13,7 +13,8 @@ TROIS REGLES PORTENT LE RESTE.
    reecrirait detruirait tout cela sans bruit — et cette phase tourne aussi
    sur une machine deja installee (la bascule de production passe par
    `install.py --root /`). Les cles absentes sont AJOUTEES, les presentes ne
-   sont pas touchees.
+   sont pas touchees. One exception (add_profiles): a profile the
+   answers turn on is added to COMPOSE_PROFILES, never removed.
 
 2. LES GID SONT LUS SUR LA CIBLE. group_add supposait video=44 et render=105.
    video=44 est stable sur Debian, render ne l'est pas (104, 105 ou 106 selon
@@ -48,6 +49,7 @@ from atomic_env import write_env
 from data_dirs import ensure_data_dirs
 from retired import retire_stack_files, retire_units
 from safe_copy import copy_stack
+from subtitles import PROFILE as SUBTITLE_PROFILE, translation_env
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STACK = os.path.join(HERE, "stack")
@@ -148,6 +150,38 @@ def merge_env(existing, rendered):
         return existing
     tail = "\n# --- Ajoute par le package media-manager ---\n" + "\n".join(added)
     return existing.rstrip("\n") + "\n" + tail + "\n"
+
+
+def add_profiles(text, wanted):
+    """The .env with every profile in `wanted` present in COMPOSE_PROFILES.
+
+    The one exception to "an existing value is never touched" (rule 1): a
+    profile the wizard's answers turn on is ADDED to an existing
+    COMPOSE_PROFILES. Without it, recording `subtitle_translation=true` on an
+    installed host rendered every SUBTITLE_* value and then silently never
+    started Lingarr. Nothing is ever removed: a profile enabled by hand (the
+    documented way to turn SABnzbd back on) stays, and turning one off is
+    still a hand edit. Only the last assignment is rewritten, since that is
+    the one compose reads; quoting and every other line are left as they are.
+    """
+    lines = text.splitlines(keepends=True)
+    index = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("#") and stripped.partition("=")[0].strip() == "COMPOSE_PROFILES":
+            index = i
+    if index is None:
+        return text
+    key, _, value = lines[index].rstrip("\n").partition("=")
+    value = value.strip()
+    quote = value[0] if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"" else ""
+    current = [p.strip() for p in value.strip(quote).split(",") if p.strip()]
+    missing = [p for p in wanted if p not in current]
+    if not missing:
+        return text
+    newline = "\n" if lines[index].endswith("\n") else ""
+    lines[index] = f"{key}={quote}{','.join(current + missing)}{quote}{newline}"
+    return "".join(lines)
 
 
 def env_identity(text):
@@ -253,6 +287,14 @@ def install(root, answers):
                             "/media/backup/.transcode")
     timezone = text_answer(answers, "timezone", "Europe/Paris")
     plex_claim = text_answer(answers, "plex_claim")
+    subtitle_translation = bool_answer(answers, "subtitle_translation")
+    subtitle_env = translation_env(
+        subtitle_translation,
+        text_answer(answers, "subtitle_translation_endpoint"),
+        text_answer(answers, "subtitle_translation_model"),
+        text_answer(answers, "subtitle_translation_api_key"),
+        text_answer(answers, "subtitle_source_languages", "en"),
+        text_answer(answers, "subtitle_target_languages", "fr"))
 
     dest = os.path.join(root, DEST_REL)
 
@@ -280,6 +322,8 @@ def install(root, answers):
         profiles.append("nvenc")
     if usenet:
         profiles.append("usenet")
+    if subtitle_translation:
+        profiles.append(SUBTITLE_PROFILE)
 
     rendered = render_env({
         "TZ": timezone,
@@ -295,12 +339,13 @@ def install(root, answers):
         "VIDEO_GID": str(group_gid(root, "video")),
         "RENDER_GID": str(group_gid(root, "render")),
         "PLEX_CLAIM": plex_claim,
+        **subtitle_env,
     })
 
     env_path = os.path.join(dest, ".env")
     if os.path.isfile(env_path):
         with open(env_path) as fh:
-            rendered = merge_env(fh.read(), rendered)
+            rendered = add_profiles(merge_env(fh.read(), rendered), profiles)
         emit({"event": "progress", "pct": 70,
               "msg": ".env existant conserve, variables manquantes ajoutees"})
     # Docker would create these as root, unwritable by a non-root service.

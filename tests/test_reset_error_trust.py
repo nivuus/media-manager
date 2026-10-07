@@ -137,6 +137,8 @@ with tempfile.TemporaryDirectory() as tmp, case("all pass", failures):
         ("GET", "/queue"),
         ("POST", "/downloadclient/testall"), ("GET", "/health"),
         ("DELETE", "/queue/202"),
+        # After a removal with a blocklist: does Sonarr re-search by itself?
+        ("GET", "/config/downloadclient"),
         ("GET", "/series"),
     ])
     check("all pass: refresh command sent as is",

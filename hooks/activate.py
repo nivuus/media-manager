@@ -66,6 +66,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
+import lingarr_setup
 from atomic_env import write_env
 
 DEPLOY = "/opt/nivuus/media-manager"
@@ -87,6 +88,15 @@ HARVEST = {
     "SONARR_API_KEY": "sonarr/config.xml",
     "PROWLARR_API_KEY": "prowlarr/config.xml",
 }
+
+# Services that read the Radarr/Sonarr API keys from their environment, once,
+# when their container is created. Created in the same wave as everything
+# else, on a fresh install they would start with the empty keys of the .env
+# and keep them until recreated by hand: they are created after the harvest.
+KEY_CONSUMERS = ("recyclarr", "lingarr")
+
+# Optional (profile `lingarr`): configured through its API when declared.
+LINGARR = "lingarr"
 
 # Un service qui tire son image puis initialise sa base met des minutes, pas
 # des secondes. Borne large, mais bornee : la phase dispose de 7200 s au total.
@@ -223,6 +233,15 @@ def services_to_start(declared, existing):
     return [name for name in declared if name not in have]
 
 
+def compose_up(services):
+    """`docker compose up -d` on exactly these services, raising on failure."""
+    proc = compose("up", "-d", *services)
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip()
+        raise ActivationError(
+            f"docker compose up -d {' '.join(services)}: {detail}")
+
+
 def start_units(units):
     """Recharger systemd et demarrer les unites. Ne leve jamais.
 
@@ -251,15 +270,15 @@ def run_phase(root):
     try:
         ensure_docker()
         emit({"event": "progress", "pct": 10, "msg": "Demarrage de la mediatheque"})
-        todo = services_to_start(compose_services("config", "--services"),
+        declared = compose_services("config", "--services")
+        todo = services_to_start(declared,
                                  compose_services("ps", "-a", "--services"))
-        if todo:
-            proc = compose("up", "-d", *todo)
-            if proc.returncode != 0:
-                detail = (proc.stderr or "").strip()
-                raise ActivationError(
-                    f"docker compose up -d {' '.join(todo)}: {detail}")
-        else:
+        # Key consumers wait for the harvest below (see KEY_CONSUMERS).
+        later = [name for name in todo if name in KEY_CONSUMERS]
+        first = [name for name in todo if name not in KEY_CONSUMERS]
+        if first:
+            compose_up(first)
+        elif not later:
             emit({"event": "progress", "pct": 40,
                   "msg": "Tous les services ont deja un conteneur, rien a creer"})
     except ActivationError as exc:
@@ -290,6 +309,18 @@ def run_phase(root):
     # Atomic: a harvest that changes nothing (every key already set) must
     # not touch the file at all, and mode 0600 is guaranteed by write_env.
     write_env(env_path, filled)
+
+    try:
+        if later:
+            emit({"event": "progress", "pct": 75,
+                  "msg": "Demarrage de " + ", ".join(later)})
+            compose_up(later)
+        if LINGARR in declared:
+            for msg in lingarr_setup.configure():
+                emit({"event": "progress", "pct": 80, "msg": msg})
+    except (ActivationError, lingarr_setup.LingarrSetupError) as exc:
+        print(f"media-manager activate: {exc}", file=sys.stderr)
+        return 1
 
     emit({"event": "progress", "pct": 85, "msg": "Armement des timers"})
     for timer in TIMERS:

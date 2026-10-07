@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=https://schemas.recyclarr.dev/v8/config-schema.json
+#
+# The language policy of the stack, as code. Recyclarr syncs it into Radarr
+# and Sonarr every day (CRON_SCHEDULE in the compose service), so a score
+# edited by hand in either UI is put back, and the policy is reviewed in git
+# instead of discovered in two SQLite databases.
+#
+# It reproduces the policy the reference host ran before Recyclarr, score for
+# score: French audio or a MULTI/FRENCH release title is wanted (+100),
+# English-only is tolerated but ranked last (-20), HDR breaks ties (+1), a
+# full Blu-ray disc is refused (-10000, Radarr only). Both profiles of each
+# instance carry it — the 4K ones once shipped without any of it (see
+# CLAUDE.md, "Language policy").
+#
+# Deliberately NOT managed here, so Recyclarr leaves them as they are:
+# - the qualities and the cutoff quality of each profile (no `qualities`,
+#   no `upgrade.until_quality`);
+# - quality definitions (file sizes);
+# - media naming.
+# Adding TRaSH guide formats or profiles changes what gets grabbed: that is a
+# policy change, to be made here, on purpose, in its own commit.
+#
+# API keys come from the stack's .env through the container environment.
+
+radarr:
+  radarr:
+    base_url: http://radarr:7878
+    api_key: !env_var RADARR_API_KEY
+    # Only formats Recyclarr itself synced are ever deleted, never one made by
+    # hand in the UI: dropping a file below removes its format from Radarr.
+    delete_old_custom_formats: true
+
+    quality_profiles:
+      - name: 1080p
+        min_format_score: -1000
+        # A format not listed below gets score 0 in this profile: the scores
+        # below are the whole policy, not a subset of it.
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: true
+          until_score: 3
+      - name: 4K
+        min_format_score: -1000
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: true
+          until_score: 3
+
+    custom_formats:
+      - trash_ids: [nivuus-radarr-french, nivuus-radarr-multi-french-titre]
+        assign_scores_to:
+          - name: 1080p
+            score: 100
+          - name: 4K
+            score: 100
+      - trash_ids: [nivuus-radarr-english]
+        assign_scores_to:
+          - name: 1080p
+            score: -20
+          - name: 4K
+            score: -20
+      - trash_ids: [nivuus-radarr-hdr]
+        assign_scores_to:
+          - name: 1080p
+            score: 1
+          - name: 4K
+            score: 1
+      - trash_ids: [nivuus-radarr-br-disk]
+        assign_scores_to:
+          - name: 1080p
+            score: -10000
+          - name: 4K
+            score: -10000
+
+sonarr:
+  sonarr:
+    base_url: http://sonarr:8989
+    api_key: !env_var SONARR_API_KEY
+    delete_old_custom_formats: true
+
+    quality_profiles:
+      - name: 1080p
+        min_format_score: -1000
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: true
+          until_score: 3
+      - name: 4K
+        min_format_score: -1000
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: true
+          until_score: 3
+
+    custom_formats:
+      - trash_ids: [nivuus-sonarr-french, nivuus-sonarr-multi-french-titre]
+        assign_scores_to:
+          - name: 1080p
+            score: 100
+          - name: 4K
+            score: 100
+      - trash_ids: [nivuus-sonarr-english]
+        assign_scores_to:
+          - name: 1080p
+            score: -20
+          - name: 4K
+            score: -20
+      - trash_ids: [nivuus-sonarr-hdr]
+        assign_scores_to:
+          - name: 1080p
+            score: 1
+          - name: 4K
+            score: 1

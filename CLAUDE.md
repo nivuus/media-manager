@@ -47,6 +47,16 @@ armées par le hook `activate`. L'ancien `cleanup` a été retiré au profit de
 Maintainerr ; le hook `install` supprime ce qu'une version précédente en
 avait posé (`hooks/retired.py`). Tests : `make test`.
 
+## Detailed docs (`docs/claude/`)
+
+- [`recyclarr.md`](docs/claude/recyclarr.md) — the language policy as code:
+  what Recyclarr manages, how to change it, why `./recyclarr` belongs to PUID.
+- [`maintenance.md`](docs/claude/maintenance.md) — the safeguards ported from
+  Cleanuparr (quarantine, import guard, replacement search, queue threshold).
+- [`lingarr.md`](docs/claude/lingarr.md) — optional subtitle translation with
+  a local LLM: wiring, the anonymous-onboarding hole, the firewall
+  prerequisite, turning it on for an existing install.
+
 ## Essential Commands
 
 ### Container Management
@@ -97,14 +107,17 @@ Radarr/Sonarr serve the queue from memory — empty
 right after a restart, and missing every download of a client that is down
 or backed off — so purging on an untrusted queue once deleted a completed,
 unimported 36.8 GB download (audit C2). Queue rows that were actually read
-are still processed whether or not their queue was trusted.
+are still processed whether or not their queue was trusted. The purge
+**quarantines** files under `Downloads/.quarantine/` for 72h before deleting
+them; to restore one, move it back (`docs/claude/maintenance.md`).
 
 A finished download that failed to import (`importPending`/`importBlocked`)
 is **imported, never deleted**: the script calls the manual-import API for it
-(120s read timeout — Radarr/Sonarr ffprobe every file in the download).
-Deleting those instead re-opened the exact same grab on every cycle —
-measured at 64 re-grabs of a single season pack, which is what exhausted the
-indexer API quotas. A row whose files vanished from `DOWNLOADS_DIR` is
+(120s read timeout — Radarr/Sonarr ffprobe every file in the download), only
+once a second queue read 120 s later still shows it pending and the app is not
+importing itself. Deleting those instead re-opened the exact same grab on
+every cycle — measured at 64 re-grabs of a single season pack, which is what
+exhausted the indexer API quotas. A row whose files vanished from `DOWNLOADS_DIR` is
 removed **without** blocklisting (the release itself was fine); one stuck
 more than 72h, or one Radarr/Sonarr flags as a bad release, is removed
 **with** blocklisting so the next search picks a different one. Files-gone is
@@ -139,7 +152,9 @@ then the rest of the budget from the backlog ordered by `lastSearchTime`
 ascending, never-searched first — deterministic and stateless, there is no
 state file to keep in sync (do not reintroduce `.update_wanted_state`).
 Instances are spaced by `DELAY_BETWEEN_INSTANCES` (120s). Unreleased/unaired
-items are skipped. Exit status is 1 if any instance failed. The same boot
+items, and those released less than 6h ago, are skipped; an instance with more
+than 20 rows in its queue is not searched that run. Exit status is 1 if any
+instance failed. The same boot
 catch-up applies after a reboot that missed 07:00: an instance not listening
 yet records "cannot fetch the missing list", is not searched, and the run
 exits 1 — one expected `OnFailure=` alert, and no readiness wait, for the
@@ -239,6 +254,9 @@ English-only (the 4K Bond batch of 2026-08-21). Aligned on 2026-08-24 with the
 `cutoffFormatScore 3` (an English file stays below the cutoff, so it remains
 upgradable), `language: Any` (`Original` rejected French-only releases outright).
 Sonarr's quality profiles have no `language` field — that one is Radarr-only.
+**Since 2026-10-07 these scores are code** (`stack/recyclarr/recyclarr.yml`,
+synced daily by Recyclarr): change them there, not in the UI, which is reverted
+the next day. See `docs/claude/recyclarr.md`.
 
 A title already imported in English is **not** re-searched on its own: Radarr
 only reconsiders it when RSS sync happens to surface a better release. There are
@@ -266,6 +284,12 @@ too (`jobs.radarr-scan.schedule`).
   `SELECT FileName, DownloadStarted, DownloadFinished FROM Downloads WHERE Completed IS NULL`,
   and compare the `.download` file size against `Torrents.RdSize`. Unblock with
   `docker compose restart rdtclient`.
+- **Stuck forever at "Starting host", nothing on port 6500** (healthcheck
+  `curl` exit 7, Radarr: "Connection refused (rdtclient:6500)"): a hard reset
+  during start-up left EF Core's SQLite migration lock behind, and EF waits for
+  it indefinitely (`AcquireDatabaseLockAsync`). Seen 2026-10-06, lock dated the
+  19:43 freeze, 16 h of downtime. Stop the service, back up `rdtclient.db`,
+  `sqlite3 rdtclient/rdtclient.db 'DELETE FROM __EFMigrationsLock'`, start it.
 - Transient `ProviderUpdater` errors (AllDebrid "database error", 10s HTTP
   timeout) are normal and self-healing — the loop retries on the next pass. They
   are not the cause of stalled queues.
@@ -457,6 +481,8 @@ to its footprintId through `POST /api/v2/client/status-tables` with
 ## Security Notes
 
 - Seerr is **localhost-only** (`127.0.0.1:5055`)
+- Lingarr is **localhost-only** (`127.0.0.1:9876`): its onboarding endpoint is
+  anonymous and switches authentication off (see `docs/claude/lingarr.md`).
 - Maintainerr is **localhost-only** (`127.0.0.1:6246`) and has **no
   authentication** on its UI or API: anyone who can reach the port can delete
   media through it. Never publish it on another interface.

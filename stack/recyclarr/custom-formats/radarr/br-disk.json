@@ -1,0 +1,16 @@
+{
+  "trash_id": "nivuus-radarr-br-disk",
+  "name": "BR-DISK",
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [
+    {
+      "name": "BR-DISK",
+      "implementation": "ReleaseTitleSpecification",
+      "negate": false,
+      "required": true,
+      "fields": {
+        "value": "^(?!.*\\b((?<!HD[._ -]|HD)DVD|BDRip|720p|MKV|XviD|WMV|d3g|(BD)?REMUX|^(?=.*1080p)(?=.*HEVC)|[xh][-_. ]?26[45]|German.*[DM]L|((?<=\\d{4}).*German.*([DM]L)?)(?=.*\\b(720p|1080p|2160p)\\b)))(?=.*\\b(COMPLETE|Dis[ck])\\b)(?=.*(Blu-?Ray|UHD|BD|BR)).*"
+      }
+    }
+  ]
+}

@@ -39,6 +39,11 @@ from safe_copy import DIR_FLAGS, DEST_ROOT_FLAGS, refuse_component
 # 0750: the service user owns it, its group may read, nobody else.
 NON_ROOT_DATA_DIRS = {
     "maintainerr": 0o750,
+    # Holds the tracked recyclarr.yml (laid by the install copy, as root)
+    # AND the state Recyclarr writes next to it, so the directory itself
+    # must be the service user's.
+    "recyclarr": 0o750,
+    "lingarr": 0o750,
 }
 
 

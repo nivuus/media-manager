@@ -204,6 +204,12 @@ def routes(radarr_queue=None, sonarr_queue=None):
         table[("POST", f"{base}/command")] = created(REFRESH_ID[base])
         table[("GET", f"{base}/command/{REFRESH_ID[base]}")] = refresh_status(
             base, "completed")
+        # Nothing importing: manual imports are cleared once confirmed.
+        table[("GET", f"{base}/command")] = reply(200, [])
+        # The apps' default: they search again by themselves after a blocklist.
+        table[("GET", f"{base}/config/downloadclient")] = reply(
+            200, {"id": 1, "autoRedownloadFailed": True,
+                  "enableCompletedDownloadHandling": True})
     return table
 
 
@@ -220,15 +226,16 @@ def run(table, downloads, patches=(), clock=None, environ=None):
     """One reset-error run; returns (exit status, fake API, log lines).
 
     The run sees environment(downloads) unless `environ` is given. The queue
-    refresh is polled on `clock`, a fresh FakeClock by default: no case ever
-    sleeps for real.
+    refresh and the import guard poll and wait on `clock`, a fresh FakeClock
+    by default: no case ever sleeps for real.
     """
     api = FakeApi(table)
+    clock = clock or FakeClock()
     CAPTURE.lines.clear()
     with contextlib.ExitStack() as stack:
         stack.enter_context(mock.patch("requests.request", new=api))
-        stack.enter_context(mock.patch("maintenance.queue_trust.time",
-                                       new=clock or FakeClock()))
+        stack.enter_context(mock.patch("maintenance.queue_trust.time", new=clock))
+        stack.enter_context(mock.patch("maintenance.import_guard.time", new=clock))
         for target, error in patches:
             stack.enter_context(mock.patch(target, side_effect=error))
         try:

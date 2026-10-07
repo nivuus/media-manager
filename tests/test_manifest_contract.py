@@ -83,7 +83,10 @@ keys = [q.get("key") for q in questions]
 check("cles uniques", len(keys), len(set(keys)))
 check("cles attendues", sorted(keys),
       sorted(["media_root", "transcode_dir", "timezone", "nvenc_node",
-              "usenet", "plex_claim"]))
+              "usenet", "plex_claim", "subtitle_translation",
+              "subtitle_translation_endpoint", "subtitle_translation_model",
+              "subtitle_translation_api_key", "subtitle_source_languages",
+              "subtitle_target_languages"]))
 
 for question in questions:
     key = question.get("key")
@@ -105,6 +108,12 @@ check("media_root est du texte", by_key["media_root"]["type"], "texte")
 check("media_root est requis", by_key["media_root"].get("required"), True)
 check("nvenc_node est un booleen", by_key["nvenc_node"]["type"], "bool")
 check("usenet est un booleen", by_key["usenet"]["type"], "bool")
+check("subtitle_translation is a boolean, off by default",
+      (by_key["subtitle_translation"]["type"],
+       by_key["subtitle_translation"].get("default")), ("bool", False))
+# The translation key may protect a paid endpoint: never echoed back.
+check("subtitle_translation_api_key is a secret",
+      by_key["subtitle_translation_api_key"]["type"], "secret")
 
 # Verification faisant autorite, quand le depot installer est disponible.
 installer_dir = os.environ.get("NIVUUS_INSTALLER_DIR")

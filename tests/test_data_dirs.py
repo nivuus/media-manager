@@ -44,8 +44,13 @@ def mode(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
 
 
-# The declared list is data: Maintainerr is in it, with a private mode.
-check("declared list", data_dirs.NON_ROOT_DATA_DIRS, {"maintainerr": 0o750})
+# The declared list is data: every service that runs as the compose user
+# without handling PUID/PGID itself is in it, with a private mode.
+check("declared list", data_dirs.NON_ROOT_DATA_DIRS,
+      {"maintainerr": 0o750, "recyclarr": 0o750, "lingarr": 0o750})
+
+# The scenarios below test the mechanism on one directory, not the list.
+ONE = {"maintainerr": 0o750}
 
 # --- Missing dir: created 0750 (whatever the umask), owned as asked -------
 old_umask = os.umask(0o000)
@@ -79,7 +84,7 @@ with tempfile.TemporaryDirectory() as dest:
     inner = os.path.join(path, "maintainerr.sqlite")
     pathlib.Path(inner).write_text("data\n")
     with mock.patch("os.fchown") as spy, mock.patch("os.geteuid", return_value=0):
-        data_dirs.ensure_data_dirs(dest, os.getuid() + 1, os.getgid() + 1)
+        data_dirs.ensure_data_dirs(dest, os.getuid() + 1, os.getgid() + 1, ONE)
     check("other owner: one chown", spy.call_count, 1)
     check("other owner: chown args", spy.call_args.args[1:],
           (os.getuid() + 1, os.getgid() + 1))
@@ -99,8 +104,8 @@ with tempfile.TemporaryDirectory() as dest:
     with mock.patch("os.fchown") as spy, \
             mock.patch("os.geteuid", return_value=1001), \
             mock.patch("sys.stderr", new=io.StringIO()) as err:
-        data_dirs.ensure_data_dirs(dest, 1000, 1000)
-        data_dirs.ensure_data_dirs(dest, 1000, 1000)  # existing, still wrong
+        data_dirs.ensure_data_dirs(dest, 1000, 1000, ONE)
+        data_dirs.ensure_data_dirs(dest, 1000, 1000, ONE)  # existing, still wrong
     check("unprivileged: dir created", os.path.isdir(path), True)
     check("unprivileged: mode 0750", mode(path), 0o750)
     check("unprivileged: no chown attempted", spy.call_count, 0)

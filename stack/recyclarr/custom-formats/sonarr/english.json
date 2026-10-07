@@ -1,0 +1,17 @@
+{
+  "trash_id": "nivuus-sonarr-english",
+  "name": "English",
+  "includeCustomFormatWhenRenaming": true,
+  "specifications": [
+    {
+      "name": "English",
+      "implementation": "LanguageSpecification",
+      "negate": false,
+      "required": true,
+      "fields": {
+        "value": 1,
+        "exceptLanguage": false
+      }
+    }
+  ]
+}

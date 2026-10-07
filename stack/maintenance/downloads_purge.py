@@ -1,9 +1,12 @@
 """The Downloads directory: what is still in it, what the queues reference,
-and the 24-hour purge."""
+and the 24-hour purge, which moves files to the quarantine (quarantine.py)
+rather than deleting them."""
 import errno
 import logging
 import os
 import time
+
+from maintenance.quarantine import QUARANTINE_DIRNAME, move_in
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +21,21 @@ def entry_name(path):
     return os.path.basename(str(path).rstrip('/'))
 
 
+def walk_downloads(downloads_dir, onerror, topdown=True):
+    """os.walk over Downloads, never entering the quarantine.
+
+    What is in the quarantine is no download any more: never purged again,
+    never a reason to believe a queue row's files are still there.
+    """
+    quarantine = os.path.join(downloads_dir, QUARANTINE_DIRNAME)
+    for root, dirs, files in os.walk(downloads_dir, topdown=topdown, onerror=onerror):
+        if root == quarantine or root.startswith(quarantine + os.sep):
+            continue
+        if root == downloads_dir:
+            dirs[:] = [d for d in dirs if d != QUARANTINE_DIRNAME]
+        yield root, dirs, files
+
+
 def names_under(downloads_dir):
     """Every file and directory name in the Downloads directory, at any depth.
 
@@ -28,7 +46,7 @@ def names_under(downloads_dir):
         raise error
 
     names = set()
-    for _root, dirs, files in os.walk(downloads_dir, onerror=unlistable):
+    for _root, dirs, files in walk_downloads(downloads_dir, unlistable):
         names.update(dirs)
         names.update(files)
     return names
@@ -66,13 +84,16 @@ def protected_names(records):
     return active
 
 
-def purge(downloads_dir, protected, owner, failures):
-    """Remove the files older than 24 hours from the Downloads directory.
+def purge(downloads_dir, protected, owner, failures, batch):
+    """Move the files older than 24 hours from Downloads into the quarantine.
 
     Files and folders still referenced by a queue (`protected`) are kept,
     whatever their age, so the caller must only purge when every queue was
-    read. `owner` is the (uid, gid) given to the recreated category
-    subdirectories. I/O errors are recorded in `failures`.
+    read. `batch` is this run's quarantine batch (quarantine.batch_name).
+    `owner` is the (uid, gid) given to the recreated category
+    subdirectories. I/O errors are recorded in `failures`; a file that
+    cannot be renamed into the quarantine (another filesystem mounted inside
+    Downloads included) stays where it is.
     """
     if not os.path.isdir(downloads_dir):
         # Reported, never created: with the media disk unmounted, creating it
@@ -86,7 +107,7 @@ def purge(downloads_dir, protected, owner, failures):
     current_time = time.time()
     max_age_seconds = MAX_FILE_AGE_HOURS * 3600
 
-    for root, dirs, files in os.walk(downloads_dir, onerror=unlistable):
+    for root, dirs, files in walk_downloads(downloads_dir, unlistable):
         # Never descend into a download folder that is still active.
         dirs[:] = [d for d in dirs if d not in protected]
         for name in files:
@@ -95,18 +116,19 @@ def purge(downloads_dir, protected, owner, failures):
                 continue
             try:
                 if current_time - os.path.getmtime(file_path) > max_age_seconds:
-                    os.remove(file_path)
-                    log.info('Downloads purge: removed (older than %dh): %s',
-                             MAX_FILE_AGE_HOURS, file_path)
+                    target = move_in(downloads_dir, file_path, batch)
+                    log.info('Downloads purge: quarantined (older than %dh): %s -> %s',
+                             MAX_FILE_AGE_HOURS, file_path, target)
             except FileNotFoundError:
                 continue  # moved away since the listing (an import): nothing to do
             except OSError as error:
-                failures.record(f'Downloads purge: cannot remove {file_path}', error)
+                failures.record(f'Downloads purge: cannot quarantine {file_path}', error)
 
     # Remove the directories left empty.
-    for root, dirs, _files in os.walk(downloads_dir, topdown=False,
-                                      onerror=unlistable):
+    for root, dirs, _files in walk_downloads(downloads_dir, unlistable, topdown=False):
         for name in dirs:
+            if root == downloads_dir and name == QUARANTINE_DIRNAME:
+                continue
             dir_path = os.path.join(root, name)
             try:
                 os.rmdir(dir_path)

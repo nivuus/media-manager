@@ -27,8 +27,16 @@ What is guaranteed, and how:
   through the open fd rather than shutil.copystat()'s by-path chmod/utime —
   the exact gap the re-review used to swap a symlink in — and the final
   os.replace() takes both sides as (dir_fd, name) pairs so it can never be
-  pointed anywhere else either. xattrs are not copied: plain copy2()
-  semantics (content, mode, mtime) are all that is promised.
+  pointed anywhere else either. xattrs are not copied: content, mode and
+  mtime are all that is promised.
+- the deployed MODE is what git records, never what the source tree happens
+  to have: 0755 for a file with an executable bit, 0644 otherwise, and 0755
+  for a directory this copy creates. Git only knows those two file modes,
+  so the source's other bits come from the umask of whoever checked out or
+  extracted it — root's 027 here, which deployed every file 0640 and every
+  new directory 0750, unreadable by a service that runs as PUID:PGID and
+  reads its configuration from the stack (Recyclarr). The same commit must
+  deploy the same tree whoever lays it.
 - an export's directory walk (no .git) refuses a symlinked directory
   outright instead of silently skipping it, which is os.walk()'s own
   behaviour for a symlinked entry in dirnames when followlinks=False.
@@ -42,7 +50,6 @@ import errno
 import os
 import secrets
 import shutil
-import stat
 import subprocess
 
 ENV_BASENAME = ".env"
@@ -52,6 +59,11 @@ ENV_BASENAME = ".env"
 # (parent_fd, name) with these flags is the one check that cannot be raced:
 # there is no path left to resolve again after the kernel has decided.
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+# Git's two file modes, and the mode of a directory this copy creates.
+FILE_MODE = 0o644
+EXEC_MODE = 0o755
+DIR_MODE = 0o755
+
 _TMP_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 
 # The deploy dir ITSELF is opened following a symlink (no O_NOFOLLOW): it is
@@ -209,23 +221,31 @@ def refuse_component(display_path, exc):
         f"refusing to write through {reason}: {display_path}") from exc
 
 
+def git_mode(source_mode):
+    """The mode git records for a file: 0755 if executable at all, else 0644."""
+    return EXEC_MODE if source_mode & 0o111 else FILE_MODE
+
+
 def _ensure_dir_component(parent_fd, name):
     """Open `name` under parent_fd, creating it first if it does not exist.
 
     mkdir and the open that follows are two syscalls, not one atomic step,
     but a symlink planted in that gap is still caught: the open uses the
     same O_NOFOLLOW | O_DIRECTORY as an already-existing component, so a
-    swap made in between fails loudly instead of being followed. Mode 0o777
-    (subject to umask, exactly like os.makedirs()'s own default) is used
-    for a newly created directory — new directories keep the process
-    umask, existing ones are never re-stamped, by design (see task-4's
-    fix-round-2 brief, "not in scope").
+    swap made in between fails loudly instead of being followed. A newly
+    created directory gets DIR_MODE through the opened fd, whatever the
+    umask (see the module docstring); an existing one is never re-stamped:
+    its mode may be an operator's, or a data directory's (data_dirs.py).
     """
+    created = True
     try:
-        os.mkdir(name, 0o777, dir_fd=parent_fd)
+        os.mkdir(name, DIR_MODE, dir_fd=parent_fd)
     except FileExistsError:
-        pass
-    return _open_dir_component(parent_fd, name)
+        created = False
+    fd = _open_dir_component(parent_fd, name)
+    if created:
+        os.fchmod(fd, DIR_MODE)  # mkdir's mode is masked by the umask
+    return fd
 
 
 def _open_dest_dir_fd(dest_root, rel_dir):
@@ -309,7 +329,7 @@ def _write_file(dest_root, rel, source):
                 with os.fdopen(fd, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                     dst.flush()
-                    os.fchmod(dst.fileno(), stat.S_IMODE(src_stat.st_mode))
+                    os.fchmod(dst.fileno(), git_mode(src_stat.st_mode))
                     os.utime(dst.fileno(),
                              ns=(src_stat.st_atime_ns, src_stat.st_mtime_ns))
                     os.fsync(dst.fileno())
