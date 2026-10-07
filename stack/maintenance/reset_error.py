@@ -25,12 +25,17 @@ from maintenance.arr_api import (ApiError, Failures, check_api_keys,
 from maintenance.dead_metadata import remove_dead_entries
 from maintenance.downloads_purge import (download_present, names_under,
                                          protected_names, purge)
+from maintenance.import_guard import import_clearance, pending_key
+from maintenance.quarantine import batch_name, expire
 from maintenance.queue_actions import manual_import, remove_queue_item
 from maintenance.queue_policy import classify_item, item_age_hours
 from maintenance.queue_trust import read_queue
+from maintenance.replacement_search import ReplacementSearches
 from maintenance.storage_guard import library_doubt, storage_problems
 
 log = logging.getLogger(__name__)
+
+TRY_IMPORT_ACTIONS = ('try_import', 'try_import_recoverable')
 
 DEFAULT_DOWNLOADS_DIR = '/media/data/Downloads'
 
@@ -55,16 +60,24 @@ def describe(item):
     return desc
 
 
-def process_queue(instance, records, names, now, failures):
+def classify(item, names, now):
+    return classify_item(item, now, download_present=download_present(item, names))
+
+
+def process_queue(instance, records, names, now, failures, cleared, searches):
     """Classify and act on every row of one instance's queue.
 
     `names` is the Downloads listing from names_under(), or None when it could
     not be made: presence is then unknown and no row is removed as files-gone.
+    `cleared` holds the (id, downloadId) of the import-pending rows
+    import_guard cleared for a manual import; any other is kept this run.
+    `searches` (ReplacementSearches) follows each removal with a blocklist.
     """
     removed = 0
     recoverable = 0
     imported = 0
     awaiting = 0
+    unconfirmed = 0
     # A season pack spans several queue rows sharing one downloadId;
     # deleting the first row removes the download and the sibling rows 404.
     handled_download_ids = set()
@@ -72,8 +85,7 @@ def process_queue(instance, records, names, now, failures):
         download_id = item.get('downloadId')
         if download_id and download_id in handled_download_ids:
             continue
-        action = classify_item(item, now,
-                               download_present=download_present(item, names))
+        action = classify(item, names, now)
         if action == 'keep':
             continue
 
@@ -86,7 +98,14 @@ def process_queue(instance, records, names, now, failures):
             log.info('[%s] kept, local problem to fix first: %s', instance, desc)
             continue
 
-        if action in ('try_import', 'try_import_recoverable'):
+        if action in TRY_IMPORT_ACTIONS:
+            if pending_key(item) not in cleared:
+                # Not seen pending twice, or the app was importing: the app
+                # may well import it by itself; never removed for that.
+                unconfirmed += 1
+                log.info('[%s] import pending, not cleared this run, kept: %s',
+                         instance, desc)
+                continue
             try:
                 queued = manual_import(instance, item)
             except ApiError as error:
@@ -138,6 +157,10 @@ def process_queue(instance, records, names, now, failures):
         removed += 1
         if download_id:
             handled_download_ids.add(download_id)
+        if blocklist:
+            siblings = [row for row in records
+                        if download_id and row.get('downloadId') == download_id]
+            searches.after_blocklist(instance, siblings or [item], desc)
 
     summary = f'[{instance}] {removed}/{len(records)} queue rows removed'
     details = []
@@ -147,6 +170,8 @@ def process_queue(instance, records, names, now, failures):
         details.append(f'{awaiting} awaiting identification')
     if recoverable:
         details.append(f'{recoverable} kept until a local problem is fixed')
+    if unconfirmed:
+        details.append(f'{unconfirmed} import-pending not cleared this run')
     if details:
         summary += f" ({', '.join(details)})"
     log.info(summary)
@@ -219,7 +244,7 @@ def run(environ):
         # Protect files still tied to an active download before purging by age.
         purge(downloads_dir,
               protected_names(record for _, records in queues for record in records),
-              owner, failures)
+              owner, failures, batch_name(now))
     else:
         # A queue we could not read, or one its download clients did not
         # demonstrably feed, may miss any file in Downloads: with Radarr
@@ -231,11 +256,22 @@ def run(environ):
     # Listed after the purge, so it shows what the processing will face: a
     # download folder the purge found empty, and removed, counts as gone.
     names = downloads_listing(environ, downloads_dir, failures)
+    # Earlier runs' verdicts, after their grace period. Not tied to this
+    # run's queue trust: what is quarantined was judged by a trusted run.
+    expire(downloads_dir, now, failures)
+
+    # A manual import only for rows seen pending twice, on an idle instance.
+    clearance = import_clearance(
+        [instance for instance, records in queues
+         if any(classify(item, names, now) in TRY_IMPORT_ACTIONS for item in records)],
+        failures)
+    searches = ReplacementSearches(failures)
 
     # The queues that were read are still processed, trusted or not: the rows
     # present are real, only absence is unreliable.
     for instance, records in queues:
-        process_queue(instance, records, names, now, failures)
+        process_queue(instance, records, names, now, failures,
+                      clearance.get(instance, set()), searches)
     remove_dead_entries(instances, failures)
     return exit_status(failures)
 

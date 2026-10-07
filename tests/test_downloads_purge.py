@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory() as tmp:
 with tempfile.TemporaryDirectory() as tmp:
     missing = pathlib.Path(tmp) / "Downloads"
     recorded = Failures()
-    purge(str(missing), set(), (0, 0), recorded)
+    purge(str(missing), set(), (0, 0), recorded, "20261007T040000Z")
     check("purge of a missing directory: failure recorded", recorded.count, 1)
     check("purge of a missing directory: not created", missing.exists(), False)
 

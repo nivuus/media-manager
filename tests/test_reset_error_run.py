@@ -186,7 +186,7 @@ with tempfile.TemporaryDirectory() as tmp, case("dead entries", failures):
 
 # --- I/O failures in the purge are failures too ---------------------------
 PURGE_IO = [
-    ("file removal refused", "os.remove", PermissionError(13, "Permission denied")),
+    ("file quarantine refused", "os.rename", PermissionError(13, "Permission denied")),
     ("empty directory removal refused", "os.rmdir",
      PermissionError(13, "Permission denied")),
     ("category subdirectory chown refused", "os.chown",
