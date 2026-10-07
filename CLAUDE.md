@@ -47,6 +47,14 @@ armées par le hook `activate`. L'ancien `cleanup` a été retiré au profit de
 Maintainerr ; le hook `install` supprime ce qu'une version précédente en
 avait posé (`hooks/retired.py`). Tests : `make test`.
 
+## Detailed docs (`docs/claude/`)
+
+- [`recyclarr.md`](docs/claude/recyclarr.md) — the language policy as code:
+  what Recyclarr manages, how to change it, why `./recyclarr` belongs to PUID.
+- [`lingarr.md`](docs/claude/lingarr.md) — optional subtitle translation with
+  a local LLM: wiring, the anonymous-onboarding hole, the firewall
+  prerequisite, turning it on for an existing install.
+
 ## Essential Commands
 
 ### Container Management
@@ -239,6 +247,9 @@ English-only (the 4K Bond batch of 2026-08-21). Aligned on 2026-08-24 with the
 `cutoffFormatScore 3` (an English file stays below the cutoff, so it remains
 upgradable), `language: Any` (`Original` rejected French-only releases outright).
 Sonarr's quality profiles have no `language` field — that one is Radarr-only.
+**Since 2026-10-07 these scores are code** (`stack/recyclarr/recyclarr.yml`,
+synced daily by Recyclarr): change them there, not in the UI, which is reverted
+the next day. See `docs/claude/recyclarr.md`.
 
 A title already imported in English is **not** re-searched on its own: Radarr
 only reconsiders it when RSS sync happens to surface a better release. There are
@@ -457,6 +468,8 @@ to its footprintId through `POST /api/v2/client/status-tables` with
 ## Security Notes
 
 - Seerr is **localhost-only** (`127.0.0.1:5055`)
+- Lingarr is **localhost-only** (`127.0.0.1:9876`): its onboarding endpoint is
+  anonymous and switches authentication off (see `docs/claude/lingarr.md`).
 - Maintainerr is **localhost-only** (`127.0.0.1:6246`) and has **no
   authentication** on its UI or API: anyone who can reach the port can delete
   media through it. Never publish it on another interface.
