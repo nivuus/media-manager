@@ -32,3 +32,36 @@
 - key: plex_claim
   type: secret
   label: "Jeton de rattachement Plex (claim.plex.tv, facultatif)"
+
+# Lingarr (profile `lingarr`): translates an existing subtitle into the
+# target languages when Bazarr found none. It needs an OpenAI-compatible chat
+# completions endpoint; with Ollama on this host that is
+# http://host.docker.internal:11434/v1/chat/completions (or an authenticated
+# proxy in front of it). Languages are BCP-47 codes, comma-separated — any
+# language the model can write, not only the defaults.
+- key: subtitle_translation
+  type: bool
+  label: "Traduction automatique des sous-titres (Lingarr, necessite un LLM compatible OpenAI)"
+  default: false
+
+- key: subtitle_translation_endpoint
+  type: texte
+  label: "URL chat completions du LLM de traduction (ex. http://host.docker.internal:11434/v1/chat/completions)"
+
+- key: subtitle_translation_model
+  type: texte
+  label: "Modele de traduction (ex. qwen3:14b)"
+
+- key: subtitle_translation_api_key
+  type: secret
+  label: "Cle API du LLM de traduction (facultative)"
+
+- key: subtitle_source_languages
+  type: texte
+  label: "Langues des sous-titres a traduire, codes BCP-47 separes par des virgules"
+  default: "en"
+
+- key: subtitle_target_languages
+  type: texte
+  label: "Langues cibles, codes BCP-47 separes par des virgules"
+  default: "fr"

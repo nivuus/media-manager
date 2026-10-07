@@ -1,0 +1,61 @@
+# Lingarr — translates an existing subtitle into the languages Bazarr found
+# none for, with an OpenAI-compatible chat endpoint (a local LLM by default).
+# Included by docker-compose.yml.
+services:
+  lingarr:
+    image: ghcr.io/lingarr-translate/lingarr:latest
+    # Optional: enabled by COMPOSE_PROFILES=lingarr, written by the install
+    # hook when the wizard's `subtitle_translation` answer is true. Without a
+    # translation endpoint it has nothing to translate with.
+    profiles:
+      - lingarr
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    restart: always
+    # The image runs as root by default and would write root-owned subtitles
+    # into the library. As the stack user, its database directory is created
+    # and owned by the install hook (hooks/data_dirs.py).
+    user: ${PUID}:${PGID}
+    depends_on:
+      - radarr
+      - sonarr
+    environment:
+      - TZ=${TZ}
+      - ASPNETCORE_URLS=http://+:9876
+      - DB_CONNECTION=sqlite
+      - TELEMETRY_ENABLED=false
+      # Lingarr 1.3.0 lets anyone call POST /api/auth/onboarding anonymously,
+      # which switches its authentication off: a login here would protect
+      # nothing. It is published on the loopback only instead (see ports),
+      # like Seerr and Maintainerr, and the activate hook completes the
+      # onboarding with authentication off so the settings API is usable.
+      - AUTH_ENABLED=false
+      # Lingarr re-applies every variable below to its database at each
+      # start: these values win over an edit made in its UI.
+      - RADARR_URL=http://radarr:7878
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - SONARR_URL=http://sonarr:8989
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - SERVICE_TYPE=localai
+      - LOCAL_AI_ENDPOINT=${SUBTITLE_TRANSLATION_ENDPOINT}
+      - LOCAL_AI_MODEL=${SUBTITLE_TRANSLATION_MODEL}
+      - LOCAL_AI_API_KEY=${SUBTITLE_TRANSLATION_API_KEY}
+      - SOURCE_LANGUAGES=${SUBTITLE_SOURCE_LANGUAGES}
+      - TARGET_LANGUAGES=${SUBTITLE_TARGET_LANGUAGES}
+    ports:
+      - 127.0.0.1:9876:9876
+    # A translation endpoint on this host (Ollama, ...) is reached as
+    # host.docker.internal, as Maintainerr reaches host-network Plex.
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./lingarr:/app/config
+      # Same inner paths as Radarr and Sonarr (/data/Movies, /data/TV Shows):
+      # Lingarr opens the paths they report as-is, so no path mapping is
+      # needed. Only the libraries are mounted, never Downloads.
+      - ${MOVIES_DIR}:/data/Movies
+      - ${TV_DIR}:/data/TV Shows
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m

@@ -4,6 +4,15 @@
 # deja, pour que le renommage ne recree rien.
 name: mediamanager
 
+# Tools around Radarr/Sonarr live in their own files, one per concern, so this
+# one stays readable. `include` merges them into this same project: they share
+# the .env, the network and depends_on with the services below, and every
+# compose call (COMPOSE_FILE, the mqtt-system-agent updater) picks them up
+# without being told about them.
+include:
+  - docker-compose.recyclarr.yml
+  - docker-compose.lingarr.yml
+
 services:
   rdtclient:
     image: rogerfar/rdtclient

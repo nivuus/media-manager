@@ -1,0 +1,15 @@
+# Recyclarr settings — see recyclarr.yml for what this stack syncs and why.
+#
+# The custom formats this stack uses are its own, not TRaSH guide ones: they
+# live as JSON files next to this one and are declared as local resource
+# providers, so recyclarr.yml can reference them by trash_id exactly like
+# guide formats. Paths are inside the container (./recyclarr -> /config).
+resource_providers:
+  - name: nivuus-radarr
+    type: custom-formats
+    path: /config/custom-formats/radarr
+    service: radarr
+  - name: nivuus-sonarr
+    type: custom-formats
+    path: /config/custom-formats/sonarr
+    service: sonarr

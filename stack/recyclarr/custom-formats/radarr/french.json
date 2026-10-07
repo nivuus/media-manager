@@ -1,0 +1,17 @@
+{
+  "trash_id": "nivuus-radarr-french",
+  "name": "French",
+  "includeCustomFormatWhenRenaming": true,
+  "specifications": [
+    {
+      "name": "French",
+      "implementation": "LanguageSpecification",
+      "negate": false,
+      "required": true,
+      "fields": {
+        "value": 2,
+        "exceptLanguage": false
+      }
+    }
+  ]
+}

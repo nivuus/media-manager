@@ -1,0 +1,17 @@
+{
+  "trash_id": "nivuus-radarr-english",
+  "name": "English",
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [
+    {
+      "name": "English",
+      "implementation": "LanguageSpecification",
+      "negate": false,
+      "required": true,
+      "fields": {
+        "value": 1,
+        "exceptLanguage": false
+      }
+    }
+  ]
+}

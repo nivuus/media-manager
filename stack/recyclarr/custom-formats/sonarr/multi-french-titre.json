@@ -1,0 +1,16 @@
+{
+  "trash_id": "nivuus-sonarr-multi-french-titre",
+  "name": "MULTI/FRENCH (titre)",
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [
+    {
+      "name": "MULTI/FRENCH",
+      "implementation": "ReleaseTitleSpecification",
+      "negate": false,
+      "required": false,
+      "fields": {
+        "value": "\\b(MULTI|MULTI\\d|TRUEFRENCH|FRENCH|VFF|VFQ|VFI|VFB|VF2|VF)\\b"
+      }
+    }
+  ]
+}

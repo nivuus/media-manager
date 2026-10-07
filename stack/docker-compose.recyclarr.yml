@@ -1,0 +1,32 @@
+# Recyclarr — the Radarr/Sonarr language policy, kept as code in
+# ./recyclarr/recyclarr.yml and synced daily. Included by docker-compose.yml.
+services:
+  recyclarr:
+    # Pinned to the major: a Recyclarr major changes its config schema (v8
+    # renamed and removed keys), and the auto-updater must not pull a version
+    # that refuses recyclarr.yml. Minor and patch updates still flow in.
+    image: ghcr.io/recyclarr/recyclarr:8
+    labels:
+      com.centurylinklabs.watchtower.enable: true
+    restart: always
+    # The image has no PUID/PGID handling; it runs as the compose user, so
+    # ./recyclarr is owned by the install hook (hooks/data_dirs.py). It must
+    # be writable: Recyclarr keeps its trash_id -> service id mappings in
+    # ./recyclarr/state, next to the tracked configuration.
+    user: ${PUID}:${PGID}
+    depends_on:
+      - radarr
+      - sonarr
+    environment:
+      - TZ=${TZ}
+      - CRON_SCHEDULE=@daily
+      # Read by recyclarr.yml through !env_var. The activate hook starts this
+      # service only after it has harvested both keys into the .env.
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - SONARR_API_KEY=${SONARR_API_KEY}
+    volumes:
+      - ./recyclarr:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m

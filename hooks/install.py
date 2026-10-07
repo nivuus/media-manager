@@ -48,6 +48,7 @@ from atomic_env import write_env
 from data_dirs import ensure_data_dirs
 from retired import retire_stack_files, retire_units
 from safe_copy import copy_stack
+from subtitles import PROFILE as SUBTITLE_PROFILE, translation_env
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STACK = os.path.join(HERE, "stack")
@@ -253,6 +254,14 @@ def install(root, answers):
                             "/media/backup/.transcode")
     timezone = text_answer(answers, "timezone", "Europe/Paris")
     plex_claim = text_answer(answers, "plex_claim")
+    subtitle_translation = bool_answer(answers, "subtitle_translation")
+    subtitle_env = translation_env(
+        subtitle_translation,
+        text_answer(answers, "subtitle_translation_endpoint"),
+        text_answer(answers, "subtitle_translation_model"),
+        text_answer(answers, "subtitle_translation_api_key"),
+        text_answer(answers, "subtitle_source_languages", "en"),
+        text_answer(answers, "subtitle_target_languages", "fr"))
 
     dest = os.path.join(root, DEST_REL)
 
@@ -280,6 +289,8 @@ def install(root, answers):
         profiles.append("nvenc")
     if usenet:
         profiles.append("usenet")
+    if subtitle_translation:
+        profiles.append(SUBTITLE_PROFILE)
 
     rendered = render_env({
         "TZ": timezone,
@@ -295,6 +306,7 @@ def install(root, answers):
         "VIDEO_GID": str(group_gid(root, "video")),
         "RENDER_GID": str(group_gid(root, "render")),
         "PLEX_CLAIM": plex_claim,
+        **subtitle_env,
     })
 
     env_path = os.path.join(dest, ".env")
