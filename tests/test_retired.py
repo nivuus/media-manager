@@ -26,6 +26,8 @@ UNIT_ABS = "/etc/systemd/system"
 DROPIN_CONTENT = "[Unit]\nOnFailure=systemd-failure-notify@%n.service\n"
 SERVICE = "media-manager-cleanup.service"
 TIMER = "media-manager-cleanup.timer"
+PLUGIN_DIR = ("tdarr/server/Tdarr/Plugins/FlowPlugins/LocalFlowPlugins/audio/"
+              "addNormalizedStereo")
 
 failures = []
 
@@ -57,6 +59,14 @@ def previous_release(root):
     dest.mkdir(parents=True)
     (dest / "media_cleanup.py").write_text("# previous release\n")
     (dest / "cleanup.log").write_text("evidence\n")
+    # Nested files of the Dolby Vision tooling and the first audio plugin.
+    # dovi_tool sits next to the script that downloaded it: the operator made
+    # it, the package never shipped it.
+    (dest / "tdarr/bin").mkdir(parents=True)
+    (dest / "tdarr/bin/fetch-binaries.sh").write_text("#!/bin/sh\n")
+    (dest / "tdarr/bin/dovi_tool").write_text("operator's binary\n")
+    (dest / PLUGIN_DIR / "1.0.0").mkdir(parents=True)
+    (dest / PLUGIN_DIR / "1.0.0/index.js").write_text("// previous release\n")
     return units, dest
 
 
@@ -75,10 +85,18 @@ with tempfile.TemporaryDirectory() as root:
     # The log is the operator's evidence of what the script deleted, not a
     # file this package shipped.
     check("retire: cleanup.log kept", (dest / "cleanup.log").read_text(), "evidence\n")
+    check("retire: nested script gone",
+          (dest / "tdarr/bin/fetch-binaries.sh").exists(), False)
+    check("retire: operator's binary kept",
+          (dest / "tdarr/bin/dovi_tool").read_text(), "operator's binary\n")
+    check("retire: retired plugin and its emptied dirs gone",
+          (dest / PLUGIN_DIR).exists(), False)
+    check("retire: the plugin category this release ships kept",
+          (dest / PLUGIN_DIR).parent.is_dir(), True)
     check("retire: current units still placed",
           (units / "media-manager-reset-error.timer").is_file(), True)
     check("retire: each removal announced",
-          proc.stdout.count("Retired: "), 5)
+          proc.stdout.count("Retired: "), 9)
 
     # Idempotent: a second run over the cleaned root removes nothing.
     again = run(root)
@@ -104,6 +122,12 @@ with tempfile.TemporaryDirectory() as root:
     outside = pathlib.Path(root) / "outside.py"
     outside.write_text("not ours\n")
     (dest / "media_cleanup.py").symlink_to(outside)
+    # A symlinked directory on the way to a retired file is never followed.
+    elsewhere = pathlib.Path(root) / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "fetch-binaries.sh").write_text("not ours either\n")
+    (dest / "tdarr").mkdir()
+    (dest / "tdarr/bin").symlink_to(elsewhere)
 
     proc = run(root)
     check("operator: exit status", proc.returncode, 0)
@@ -116,6 +140,8 @@ with tempfile.TemporaryDirectory() as root:
     check("operator: symlinked script kept",
           (dest / "media_cleanup.py").is_symlink(), True)
     check("operator: symlink target untouched", outside.read_text(), "not ours\n")
+    check("operator: file behind a symlinked dir untouched",
+          (elsewhere / "fetch-binaries.sh").read_text(), "not ours either\n")
 
 if failures:
     print("\n".join(failures))

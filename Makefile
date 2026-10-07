@@ -11,6 +11,7 @@
 
 PACKAGE_DIR := $(CURDIR)
 PYTHON ?= python3
+NODE ?= node
 
 .PHONY: test help
 
@@ -29,3 +30,5 @@ test:
 	    echo "--- $$t"; \
 	    $(PYTHON) $(PACKAGE_DIR)/tests/$$t.py || exit 1; \
 	done
+	@echo "--- tdarr_plugins"
+	@$(NODE) --test $(PACKAGE_DIR)/tests/tdarr_plugins.test.cjs

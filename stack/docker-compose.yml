@@ -338,7 +338,6 @@ services:
       - default
     volumes:
       - ./tdarr/configs:/app/configs
-      - ./tdarr/bin:/app/bin:ro
       - ./tdarr_cache:/temp
       - ${MEDIA_ROOT}:/media
     logging:
@@ -395,7 +394,6 @@ services:
       - default
     volumes:
       - ./tdarr/configs-nvenc:/app/configs
-      - ./tdarr/bin:/app/bin:ro
       - ./tdarr_cache:/temp
       - ${MEDIA_ROOT}:/media
     logging:

@@ -53,6 +53,8 @@ avait posé (`hooks/retired.py`). Tests : `make test`.
   what Recyclarr manages, how to change it, why `./recyclarr` belongs to PUID.
 - [`maintenance.md`](docs/claude/maintenance.md) — the safeguards ported from
   Cleanuparr (quarantine, import guard, replacement search, queue threshold).
+- [`tdarr.md`](docs/claude/tdarr.md) — the flow and its Local plugins, how to
+  deploy a change, and why a flow change must be followed by a requeue.
 - [`lingarr.md`](docs/claude/lingarr.md) — optional subtitle translation with
   a local LLM: wiring, the anonymous-onboarding hole, the firewall
   prerequisite, turning it on for an existing install.

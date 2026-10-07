@@ -68,8 +68,11 @@ with tempfile.TemporaryDirectory() as root:
     for rel in ("docker-compose.yml", "docker-compose.qsv.yml",
                 "reset-error.py", "update_wanted.py",
                 "tdarr/flows/OLED4K_norm_v6.json",
-                "tdarr/bin/fetch-binaries.sh",
-                "scripts/tdarr/build_flow_v6.py"):
+                "tdarr/server/Tdarr/Plugins/FlowPlugins/LocalFlowPlugins/audio/"
+                "ensureStereoPerLanguage/1.0.0/index.js",
+                "scripts/tdarr/build_flow_v6.py",
+                "scripts/tdarr/deploy_tdarr.py",
+                "scripts/tdarr/requeue_outdated.py"):
         check(f"depose: {rel}", (dest / rel).is_file(), True)
 
     # reset-error.py and update_wanted.py are thin wrappers: what the units
