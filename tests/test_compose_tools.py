@@ -103,9 +103,14 @@ for service in ("radarr", "sonarr"):
         files[doc["trash_id"]] = doc["name"]
     used = [tid for entry in instance["custom_formats"] for tid in entry["trash_ids"]]
     check(f"{service}: each format synced once", len(used), len(set(used)))
-    # A file nobody references would be synced by nothing: a format believed
-    # managed that is not.
-    check(f"{service}: referenced formats == shipped formats", sorted(used), sorted(files))
+    # Our own formats carry a nivuus- id and ship as JSON here; anything else is
+    # a TRaSH guide format, whose ids are 32 hex digits. A file nobody references
+    # would be synced by nothing: a format believed managed that is not.
+    local = [tid for tid in used if tid.startswith(f"nivuus-{service}-")]
+    check(f"{service}: referenced local formats == shipped formats", sorted(local), sorted(files))
+    guide = [tid for tid in used if tid not in local]
+    check(f"{service}: guide formats are TRaSH ids",
+          [tid for tid in guide if not re.fullmatch(r"[0-9a-f]{32}", tid)], [])
     profiles = [p["name"] for p in instance["quality_profiles"]]
     check(f"{service}: both profiles managed", profiles, ["1080p", "4K"])
     for entry in instance["custom_formats"]:

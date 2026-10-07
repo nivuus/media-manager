@@ -12,6 +12,13 @@
 # instance carry it — the 4K ones once shipped without any of it (see
 # CLAUDE.md, "Language policy").
 #
+# On top of it, four TRaSH guide formats refuse (-10000) what the quality
+# parser lets through: cinema recordings retagged as WEB/HDRip and fakes.
+# FR LQ, LQ and LQ (Release Title) list the groups known for them (HushRips
+# and RZP shipped HDTS/HDCAM files into this library); Line/Mic Dubbed
+# catches audio recorded in the theatre (Radarr only: the guide has no Sonarr
+# version). The CAM/TS/TC qualities themselves are refused by the profiles.
+#
 # Deliberately NOT managed here, so Recyclarr leaves them as they are:
 # - the qualities and the cutoff quality of each profile (no `qualities`,
 #   no `upgrade.until_quality`);
@@ -73,6 +80,17 @@ radarr:
             score: -10000
           - name: 4K
             score: -10000
+      # TRaSH guide: FR LQ, LQ, LQ (Release Title), Line/Mic Dubbed.
+      - trash_ids:
+          - 48f031e76111f17ea94898f4cdc34fdc
+          - 90a6f9a284dff5103f6346090e6280c8
+          - e204b80c87be9497a8a6eaff48f72905
+          - c465ccc73923871b3eb1802042331306
+        assign_scores_to:
+          - name: 1080p
+            score: -10000
+          - name: 4K
+            score: -10000
 
 sonarr:
   sonarr:
@@ -115,3 +133,13 @@ sonarr:
             score: 1
           - name: 4K
             score: 1
+      # TRaSH guide: FR LQ, LQ, LQ (Release Title).
+      - trash_ids:
+          - 3ba797e5dc13af4b8d9bb25e83d90de2
+          - 9c11cd3f07101cdba90a2d81cf0e56b4
+          - e2315f990da2e2cbfc9fa5b7a6fcfe48
+        assign_scores_to:
+          - name: 1080p
+            score: -10000
+          - name: 4K
+            score: -10000
