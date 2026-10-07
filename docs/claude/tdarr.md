@@ -55,12 +55,17 @@ them.
 ## Deploying a flow or plugin change
 
 ```bash
-python3 stack/scripts/tdarr/build_flow_v6.py         # after editing it
-python3 stack/scripts/tdarr/deploy_tdarr.py          # dry run
-python3 stack/scripts/tdarr/deploy_tdarr.py --apply
-python3 stack/scripts/tdarr/requeue_outdated.py --limit 20 --apply   # canary
-python3 stack/scripts/tdarr/requeue_outdated.py --apply              # the rest
+python3 stack/scripts/tdarr/build_flow_v6.py         # in the checkout, after editing it
+# ...commit, then deploy the stack (install hook / nivuus update), then on the host:
+cd /opt/nivuus/media-manager/scripts/tdarr
+python3 deploy_tdarr.py                              # dry run
+python3 deploy_tdarr.py --apply
+python3 requeue_outdated.py --match "Some Title" --apply   # canary, one path at a time
+python3 requeue_outdated.py --apply                        # the rest
 ```
+
+`requeue_outdated.py` reads the server database next to it, so it runs from
+the deployed copy (or with `--db`); from a checkout it has no database.
 
 `deploy_tdarr.py` talks to the server API (`/api/v2/cruddb`,
 `/api/v2/alter-worker-limit`), never to its SQLite file: the server keeps
