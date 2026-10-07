@@ -64,6 +64,13 @@ python3 requeue_outdated.py --match "Some Title" --apply   # canary, one path at
 python3 requeue_outdated.py --apply                        # the rest
 ```
 
+Retiring a plugin and replacing the flow are not atomic: the install hook
+removes the old plugin, the nodes receive the new bundle, and until
+`deploy_tdarr.py --apply` runs the old flow still names the old plugin. A job
+started in that window fails with `Plugin does not exist: ...` (seen on
+2026-10-07 for three files, originals untouched); requeue those files once
+the flow is deployed.
+
 `requeue_outdated.py` reads the server database next to it, so it runs from
 the deployed copy (or with `--db`); from a checkout it has no database.
 
