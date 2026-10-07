@@ -26,14 +26,36 @@ An edit made in the Radarr/Sonarr UI is reverted the next day. Adding TRaSH
 guide formats changes what gets grabbed: make that change on purpose, in its
 own commit, after a `--preview`.
 
+## Keeping cinema recordings out
+
+Three layers, added on 2026-10-07 after HDCAM/HDTS files (HushRips, RZP) and
+a `.exe` fake had reached the library or the queue:
+
+- **The profiles' qualities.** CAM, TELESYNC, TELECINE, WORKPRINT, DVDSCR,
+  REGIONAL and DVD-R are refused. Everything from SDTV to 1080p is allowed in
+  the `1080p` profiles of both instances: the cutoff is unchanged, so an SD or
+  720p file is only a fallback that gets upgraded. Not managed here — set in
+  the UI.
+- **The release name** (`recyclarr.yml`). TRaSH guide formats at -10000 in
+  all four profiles: `FR LQ`, `LQ`, `LQ (Release Title)` (groups known for
+  retagged cams and fakes) and, Radarr only, `Line/Mic Dubbed` (theatre
+  audio). They catch what the quality parser takes for WEB/HDRip.
+- **When to search.** `minimumAvailability: released` on every Radarr movie
+  and on both Radarr servers in Seerr (`overseerr/settings.json`, edited with
+  the container stopped). With `inCinemas`, a search can only find recordings
+  and fakes.
+
 ## Commands
 
 From `/opt/nivuus/media-manager`, never with an explicit `-f`:
 
 ```bash
-docker compose exec recyclarr recyclarr sync --preview   # what would change
-docker compose exec recyclarr recyclarr sync             # apply now
+docker compose exec -t recyclarr recyclarr sync --preview   # what would change
+docker compose exec recyclarr recyclarr sync                # apply now
 ```
+
+`--preview` needs the `-t`: without a TTY the change tables are not printed,
+and an empty output reads like "no change" when it is not.
 
 ## Things that bit once
 
