@@ -13,8 +13,8 @@ TROIS REGLES PORTENT LE RESTE.
    reecrirait detruirait tout cela sans bruit — et cette phase tourne aussi
    sur une machine deja installee (la bascule de production passe par
    `install.py --root /`). Les cles absentes sont AJOUTEES, les presentes ne
-   sont pas touchees. Seule exception : un profil que les reponses
-   activent est ajoute a COMPOSE_PROFILES (add_profiles), jamais retire.
+   sont pas touchees. One exception (add_profiles): a profile the
+   answers turn on is added to COMPOSE_PROFILES, never removed.
 
 2. LES GID SONT LUS SUR LA CIBLE. group_add supposait video=44 et render=105.
    video=44 est stable sur Debian, render ne l'est pas (104, 105 ou 106 selon
