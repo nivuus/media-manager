@@ -277,6 +277,12 @@ too (`jobs.radarr-scan.schedule`).
   `SELECT FileName, DownloadStarted, DownloadFinished FROM Downloads WHERE Completed IS NULL`,
   and compare the `.download` file size against `Torrents.RdSize`. Unblock with
   `docker compose restart rdtclient`.
+- **Stuck forever at "Starting host", nothing on port 6500** (healthcheck
+  `curl` exit 7, Radarr: "Connection refused (rdtclient:6500)"): a hard reset
+  during start-up left EF Core's SQLite migration lock behind, and EF waits for
+  it indefinitely (`AcquireDatabaseLockAsync`). Seen 2026-10-06, lock dated the
+  19:43 freeze, 16 h of downtime. Stop the service, back up `rdtclient.db`,
+  `sqlite3 rdtclient/rdtclient.db 'DELETE FROM __EFMigrationsLock'`, start it.
 - Transient `ProviderUpdater` errors (AllDebrid "database error", 10s HTTP
   timeout) are normal and self-healing — the loop retries on the next pass. They
   are not the cause of stalled queues.
