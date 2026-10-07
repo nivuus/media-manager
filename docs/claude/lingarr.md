@@ -45,11 +45,26 @@ Maintainerr. Never publish it on another interface.
 
 ## Turning it on for an existing install
 
-The install hook never overwrites a key that already exists in the `.env`
-(rule 1 in `hooks/install.py`), and `COMPOSE_PROFILES` already exists. Recording
-`subtitle_translation=true` with `nivuus answers` therefore adds the
-`SUBTITLE_*` values but **not** the profile. Add `lingarr` to `COMPOSE_PROFILES`
-by hand, as for `usenet`, then run the activate phase.
+Record the answers (`nivuus answers media-manager subtitle_translation=true
+subtitle_translation_endpoint=... subtitle_translation_model=...`), then lay
+the package again. The install hook adds the missing `SUBTITLE_*` values and
+adds `lingarr` to the existing `COMPOSE_PROFILES` (`add_profiles` in
+`hooks/install.py`). It never removes a profile: turning Lingarr off again is
+a hand edit of `COMPOSE_PROFILES`, as for `usenet`.
+
+## Known Lingarr bug: the API key is ignored until the first restart
+
+Measured on 1.3.0 (2026-10-07): right after its first start, Lingarr sent its
+requests **without** an `Authorization` header (captured on the wire) and the
+proxy answered 401, while `local.db` held the right key. At start-up,
+`MigrateApiKeyEncryption` reads every API-key setting through the settings
+cache and caches the empty values of a fresh database. `StartupService` then
+writes the environment values straight into the database without
+invalidating that cache, and the stale empty value lives on (1 h absolute,
+30 min sliding). Any later start reads the key from the database and works.
+So on a fresh install, restart Lingarr once (`docker compose restart lingarr`)
+before the first translation. The fix belongs upstream: `StartupService`
+should write through `SettingService` so the cache is invalidated.
 
 Automatic translation (Lingarr's "automation") stays **off** after install.
 Check the quality of one translation from the UI before turning it on.
