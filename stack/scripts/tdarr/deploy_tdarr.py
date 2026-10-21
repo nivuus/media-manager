@@ -7,7 +7,8 @@ What it converges, idempotently:
   - the canonical flow (tdarr/flows/OLED4K_norm_v6.json) is upserted;
   - the production libraries run it;
   - test libraries (SAMPLE*) and every flow no library uses are removed;
-  - node worker limits match NODE_LIMITS.
+  - node worker limits match NODE_LIMITS;
+  - global settings match GLOBAL_SETTINGS.
 
 It talks to the running server instead of writing its SQLite file: the server
 keeps flows, libraries and nodes in memory, so a direct database write is
@@ -35,6 +36,14 @@ TEST_LIBRARY_PREFIX = "SAMPLE"
 # It ran 5, mostly full-file remuxes that only added an audio track, all
 # contending for the same two cores.
 NODE_LIMITS = {"NvencNode": {"transcodegpu": 2}}
+
+# Server-wide options this repository owns.
+# pluginAutoUpdate pulls the Community plugins from GitHub on its own, which
+# changes the code of every flow step under a flow that was built and tested
+# against a given release. Plugins move with the pinned image instead
+# (docker-compose.yml), deliberately.
+GLOBAL_SETTINGS_ID = "globalsettings"
+GLOBAL_SETTINGS = {"pluginAutoUpdate": False}
 
 
 class Tdarr:
@@ -129,6 +138,20 @@ def converge(api, apply):
                 do(f"{node['nodeName']}: persist {worker_type}={target}",
                    lambda name=node["nodeName"], limits=limits: api.crud(
                        "NodeJSONDB", "update", name, {"workerLimits": limits}))
+
+    converge_settings(api, apply, do)
+
+
+def converge_settings(api, apply, do):
+    print("settings")
+    current = api.crud("SettingsGlobalJSONDB", "getById", GLOBAL_SETTINGS_ID)
+    if current is None:
+        raise SystemExit(f"global settings document {GLOBAL_SETTINGS_ID!r} not found")
+    for key, target in GLOBAL_SETTINGS.items():
+        if current.get(key) != target:
+            do(f"{key}: {current.get(key)!r} -> {target!r}",
+               lambda key=key, target=target: api.crud(
+                   "SettingsGlobalJSONDB", "update", GLOBAL_SETTINGS_ID, {key: target}))
 
 
 def main():
