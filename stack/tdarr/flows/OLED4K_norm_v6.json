@@ -90,37 +90,6 @@
    }
   },
   {
-   "name": "Has AAC track?",
-   "sourceRepo": "Community",
-   "pluginName": "checkAudioCodec",
-   "version": "1.0.0",
-   "id": "V6_AAC",
-   "position": {
-    "x": 650,
-    "y": 300
-   },
-   "fpEnabled": true,
-   "inputsDB": {
-    "codec": "aac",
-    "checkBitrate": false
-   }
-  },
-  {
-   "name": "Has stereo track?",
-   "sourceRepo": "Community",
-   "pluginName": "checkChannelCount",
-   "version": "1.0.0",
-   "id": "V6_2CH",
-   "position": {
-    "x": 650,
-    "y": 360
-   },
-   "fpEnabled": true,
-   "inputsDB": {
-    "channelCount": "2"
-   }
-  },
-  {
    "name": "Already Compatible",
    "sourceRepo": "Community",
    "pluginName": "comment",
@@ -132,7 +101,7 @@
    },
    "fpEnabled": true,
    "inputsDB": {
-    "comment": "Vid\u00e9o HEVC/H264 + piste AAC st\u00e9r\u00e9o d\u00e9j\u00e0 pr\u00e9sente -> original conserv\u00e9"
+    "comment": "HEVC/H264 video and a normalised AAC stereo track per language: original kept"
    }
   },
   {
@@ -196,14 +165,40 @@
    "inputsDB": {}
   },
   {
-   "name": "Add Normalized Stereo (AAC)",
-   "sourceRepo": "Local",
-   "pluginName": "addNormalizedStereo",
+   "name": "Begin Audio Fix",
+   "sourceRepo": "Community",
+   "pluginName": "ffmpegCommandStart",
    "version": "1.0.0",
-   "id": "V6_AUD",
+   "id": "C_START",
    "position": {
-    "x": 1000,
-    "y": 1260
+    "x": 900,
+    "y": 560
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Set Aside Unreadable Subs",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "C_VTT",
+   "position": {
+    "x": 900,
+    "y": 590
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Stereo per language",
+   "sourceRepo": "Local",
+   "pluginName": "ensureStereoPerLanguage",
+   "version": "1.0.0",
+   "id": "C_STEREO",
+   "position": {
+    "x": 900,
+    "y": 620
    },
    "fpEnabled": true,
    "inputsDB": {
@@ -212,6 +207,85 @@
     "tp": "-1.5",
     "bitrate": "256k"
    }
+  },
+  {
+   "name": "Exec Audio Fix",
+   "sourceRepo": "Community",
+   "pluginName": "ffmpegCommandExecute",
+   "version": "1.0.0",
+   "id": "C_EXEC",
+   "position": {
+    "x": 900,
+    "y": 680
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Unreadable subs set aside?",
+   "sourceRepo": "Community",
+   "pluginName": "checkFlowVariable",
+   "version": "1.0.0",
+   "id": "V6_SUBS",
+   "position": {
+    "x": 1000,
+    "y": 1200
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "args.variables.user.unreadableSubtitleTracks",
+    "condition": "==",
+    "value": ""
+   }
+  },
+  {
+   "name": "Restore subs (mkvmerge)",
+   "sourceRepo": "Community",
+   "pluginName": "runCli",
+   "version": "1.0.0",
+   "id": "V6_SUBM",
+   "position": {
+    "x": 1300,
+    "y": 1230
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "useCustomCliPath": false,
+    "userCli": "mkvmerge",
+    "doesCommandCreateOutputFile": true,
+    "userOutputFilePath": "${cacheDir}/${fileName}.mkv",
+    "cliArguments": "-o \"${outputFilePath}\" \"{{{args.inputFileObj._id}}}\" --no-video --no-audio --no-attachments --no-chapters --no-global-tags --subtitle-tracks {{{args.variables.user.unreadableSubtitleTracks}}} \"{{{args.originalLibraryFile._id}}}\"",
+    "outputFileBecomesWorkingFile": true
+   }
+  },
+  {
+   "name": "Check File Duration Ratio",
+   "sourceRepo": "Community",
+   "pluginName": "compareFileDurationRatio",
+   "version": "1.0.0",
+   "id": "V6_DUR",
+   "position": {
+    "x": 1000,
+    "y": 1260
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "greaterThan": "99.5",
+    "lessThan": "100.5"
+   }
+  },
+  {
+   "name": "Fail: duration differs",
+   "sourceRepo": "Community",
+   "pluginName": "failFlow",
+   "version": "1.0.0",
+   "id": "V6_DFAIL",
+   "position": {
+    "x": 1300,
+    "y": 1290
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
   },
   {
    "name": "Check File Size Ratio",
@@ -230,35 +304,17 @@
    }
   },
   {
-   "name": "Reset Working File",
+   "name": "Fail: output truncated",
    "sourceRepo": "Community",
-   "pluginName": "setWorkingFile",
+   "pluginName": "failFlow",
    "version": "1.0.0",
-   "id": "V6_ORIG",
-   "position": {
-    "x": 1300,
-    "y": 1260
-   },
-   "fpEnabled": true,
-   "inputsDB": {
-    "source": "originalFile",
-    "customPath": ""
-   }
-  },
-  {
-   "name": "Keep Original",
-   "sourceRepo": "Community",
-   "pluginName": "comment",
-   "version": "1.0.0",
-   "id": "V6_KEEP",
+   "id": "V6_FAIL",
    "position": {
     "x": 1300,
     "y": 1320
    },
    "fpEnabled": true,
-   "inputsDB": {
-    "comment": "Sortie corrompue/suspecte (< 5 %) -> original conserv\u00e9"
-   }
+   "inputsDB": {}
   },
   {
    "name": "Replace Original File",
@@ -298,7 +354,7 @@
    },
    "fpEnabled": true,
    "inputsDB": {
-    "comment": "HEVC (NVENC ou QSV selon le node) + toutes pistes copi\u00e9es (Atmos ok). HDR10 tags conserv\u00e9s. Piste AAC st\u00e9r\u00e9o normalis\u00e9e ajout\u00e9e."
+    "comment": "HEVC (NVENC or QSV per node) or original video, every other stream copied, HDR10 metadata kept, one normalised AAC stereo track per language, subtitles ffmpeg cannot read restored by mkvmerge."
    }
   },
   {
@@ -339,6 +395,32 @@
    "position": {
     "x": 700,
     "y": 620
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Keep Primary Video H",
+   "sourceRepo": "Local",
+   "pluginName": "keepPrimaryVideo",
+   "version": "1.0.0",
+   "id": "H_KEEPV",
+   "position": {
+    "x": 700,
+    "y": 635
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Set Aside Unreadable Subs H",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "H_VTT",
+   "position": {
+    "x": 700,
+    "y": 642
    },
    "fpEnabled": true,
    "inputsDB": {}
@@ -474,6 +556,24 @@
    }
   },
   {
+   "name": "Stereo per language NVENC H",
+   "sourceRepo": "Local",
+   "pluginName": "ensureStereoPerLanguage",
+   "version": "1.0.0",
+   "id": "H_NSTEREO",
+   "position": {
+    "x": 400,
+    "y": 890
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "i": "-16.0",
+    "lra": "11.0",
+    "tp": "-1.5",
+    "bitrate": "256k"
+   }
+  },
+  {
    "name": "Exec NVENC H",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandExecute",
@@ -602,6 +702,24 @@
    }
   },
   {
+   "name": "Stereo per language QSV H",
+   "sourceRepo": "Local",
+   "pluginName": "ensureStereoPerLanguage",
+   "version": "1.0.0",
+   "id": "H_STEREO",
+   "position": {
+    "x": 700,
+    "y": 890
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "i": "-16.0",
+    "lra": "11.0",
+    "tp": "-1.5",
+    "bitrate": "256k"
+   }
+  },
+  {
    "name": "Exec QSV H",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandExecute",
@@ -657,6 +775,32 @@
    "inputsDB": {}
   },
   {
+   "name": "Keep Primary Video CPU H",
+   "sourceRepo": "Local",
+   "pluginName": "keepPrimaryVideo",
+   "version": "1.0.0",
+   "id": "H_CKEEPV",
+   "position": {
+    "x": 1000,
+    "y": 1070
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Set Aside Unreadable Subs CPU H",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "H_CVTT",
+   "position": {
+    "x": 1000,
+    "y": 1085
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
    "name": "Enc CPU libx265 H",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandSetVideoEncoder",
@@ -693,6 +837,24 @@
    "inputsDB": {
     "inputArguments": "",
     "outputArguments": "-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -max_muxing_queue_size 9999"
+   }
+  },
+  {
+   "name": "Stereo per language CPU H",
+   "sourceRepo": "Local",
+   "pluginName": "ensureStereoPerLanguage",
+   "version": "1.0.0",
+   "id": "H_CSTEREO",
+   "position": {
+    "x": 1000,
+    "y": 1190
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "i": "-16.0",
+    "lra": "11.0",
+    "tp": "-1.5",
+    "bitrate": "256k"
    }
   },
   {
@@ -746,6 +908,32 @@
    "position": {
     "x": 1600,
     "y": 620
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Keep Primary Video S",
+   "sourceRepo": "Local",
+   "pluginName": "keepPrimaryVideo",
+   "version": "1.0.0",
+   "id": "S_KEEPV",
+   "position": {
+    "x": 1600,
+    "y": 635
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Set Aside Unreadable Subs S",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "S_VTT",
+   "position": {
+    "x": 1600,
+    "y": 642
    },
    "fpEnabled": true,
    "inputsDB": {}
@@ -881,6 +1069,24 @@
    }
   },
   {
+   "name": "Stereo per language NVENC S",
+   "sourceRepo": "Local",
+   "pluginName": "ensureStereoPerLanguage",
+   "version": "1.0.0",
+   "id": "S_NSTEREO",
+   "position": {
+    "x": 1300,
+    "y": 890
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "i": "-16.0",
+    "lra": "11.0",
+    "tp": "-1.5",
+    "bitrate": "256k"
+   }
+  },
+  {
    "name": "Exec NVENC S",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandExecute",
@@ -1009,6 +1215,24 @@
    }
   },
   {
+   "name": "Stereo per language QSV S",
+   "sourceRepo": "Local",
+   "pluginName": "ensureStereoPerLanguage",
+   "version": "1.0.0",
+   "id": "S_STEREO",
+   "position": {
+    "x": 1600,
+    "y": 890
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "i": "-16.0",
+    "lra": "11.0",
+    "tp": "-1.5",
+    "bitrate": "256k"
+   }
+  },
+  {
    "name": "Exec QSV S",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandExecute",
@@ -1064,6 +1288,32 @@
    "inputsDB": {}
   },
   {
+   "name": "Keep Primary Video CPU S",
+   "sourceRepo": "Local",
+   "pluginName": "keepPrimaryVideo",
+   "version": "1.0.0",
+   "id": "S_CKEEPV",
+   "position": {
+    "x": 1900,
+    "y": 1070
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Set Aside Unreadable Subs CPU S",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "S_CVTT",
+   "position": {
+    "x": 1900,
+    "y": 1085
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
    "name": "Enc CPU libx265 S",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandSetVideoEncoder",
@@ -1103,6 +1353,24 @@
    }
   },
   {
+   "name": "Stereo per language CPU S",
+   "sourceRepo": "Local",
+   "pluginName": "ensureStereoPerLanguage",
+   "version": "1.0.0",
+   "id": "S_CSTEREO",
+   "position": {
+    "x": 1900,
+    "y": 1190
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "i": "-16.0",
+    "lra": "11.0",
+    "tp": "-1.5",
+    "bitrate": "256k"
+   }
+  },
+  {
    "name": "Exec CPU S",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandExecute",
@@ -1136,8 +1404,24 @@
   {
    "source": "H_RM",
    "sourceHandle": "1",
-   "target": "H_NCHK",
+   "target": "H_KEEPV",
    "id": "H_e3",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_KEEPV",
+   "sourceHandle": "1",
+   "target": "H_VTT",
+   "id": "H_e3k",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_VTT",
+   "sourceHandle": "1",
+   "target": "H_NCHK",
+   "id": "H_e3v",
    "type": "smoothstep",
    "animated": true
   },
@@ -1272,15 +1556,31 @@
   {
    "source": "H_NARGS",
    "sourceHandle": "1",
-   "target": "H_NEXEC",
+   "target": "H_NSTEREO",
    "id": "H_n5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NSTEREO",
+   "sourceHandle": "1",
+   "target": "H_NEXEC",
+   "id": "H_n5a",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_NSTEREO",
+   "sourceHandle": "2",
+   "target": "H_NEXEC",
+   "id": "H_n5b",
    "type": "smoothstep",
    "animated": true
   },
   {
    "source": "H_NEXEC",
    "sourceHandle": "1",
-   "target": "V6_AUD",
+   "target": "V6_SUBS",
    "id": "H_n6",
    "type": "smoothstep",
    "animated": true
@@ -1408,15 +1708,31 @@
   {
    "source": "H_ARGS",
    "sourceHandle": "1",
-   "target": "H_EXEC",
+   "target": "H_STEREO",
    "id": "H_e5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_STEREO",
+   "sourceHandle": "1",
+   "target": "H_EXEC",
+   "id": "H_e5a",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_STEREO",
+   "sourceHandle": "2",
+   "target": "H_EXEC",
+   "id": "H_e5b",
    "type": "smoothstep",
    "animated": true
   },
   {
    "source": "H_EXEC",
    "sourceHandle": "1",
-   "target": "V6_AUD",
+   "target": "V6_SUBS",
    "id": "H_e6",
    "type": "smoothstep",
    "animated": true
@@ -1448,8 +1764,24 @@
   {
    "source": "H_CRM",
    "sourceHandle": "1",
-   "target": "H_CENC",
+   "target": "H_CKEEPV",
    "id": "H_c3",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_CKEEPV",
+   "sourceHandle": "1",
+   "target": "H_CVTT",
+   "id": "H_c3k",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_CVTT",
+   "sourceHandle": "1",
+   "target": "H_CENC",
+   "id": "H_c3v",
    "type": "smoothstep",
    "animated": true
   },
@@ -1464,24 +1796,32 @@
   {
    "source": "H_CARGS",
    "sourceHandle": "1",
-   "target": "H_CEXEC",
+   "target": "H_CSTEREO",
    "id": "H_c5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_CSTEREO",
+   "sourceHandle": "1",
+   "target": "H_CEXEC",
+   "id": "H_c5a",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_CSTEREO",
+   "sourceHandle": "2",
+   "target": "H_CEXEC",
+   "id": "H_c5b",
    "type": "smoothstep",
    "animated": true
   },
   {
    "source": "H_CEXEC",
    "sourceHandle": "1",
-   "target": "V6_AUD",
+   "target": "V6_SUBS",
    "id": "H_c6",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "H_CEXEC",
-   "sourceHandle": "err1",
-   "target": "V6_ORIG",
-   "id": "H_cerr",
    "type": "smoothstep",
    "animated": true
   },
@@ -1504,8 +1844,24 @@
   {
    "source": "S_RM",
    "sourceHandle": "1",
-   "target": "S_NCHK",
+   "target": "S_KEEPV",
    "id": "S_e3",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_KEEPV",
+   "sourceHandle": "1",
+   "target": "S_VTT",
+   "id": "S_e3k",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_VTT",
+   "sourceHandle": "1",
+   "target": "S_NCHK",
+   "id": "S_e3v",
    "type": "smoothstep",
    "animated": true
   },
@@ -1640,15 +1996,31 @@
   {
    "source": "S_NARGS",
    "sourceHandle": "1",
-   "target": "S_NEXEC",
+   "target": "S_NSTEREO",
    "id": "S_n5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NSTEREO",
+   "sourceHandle": "1",
+   "target": "S_NEXEC",
+   "id": "S_n5a",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_NSTEREO",
+   "sourceHandle": "2",
+   "target": "S_NEXEC",
+   "id": "S_n5b",
    "type": "smoothstep",
    "animated": true
   },
   {
    "source": "S_NEXEC",
    "sourceHandle": "1",
-   "target": "V6_AUD",
+   "target": "V6_SUBS",
    "id": "S_n6",
    "type": "smoothstep",
    "animated": true
@@ -1776,15 +2148,31 @@
   {
    "source": "S_ARGS",
    "sourceHandle": "1",
-   "target": "S_EXEC",
+   "target": "S_STEREO",
    "id": "S_e5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_STEREO",
+   "sourceHandle": "1",
+   "target": "S_EXEC",
+   "id": "S_e5a",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_STEREO",
+   "sourceHandle": "2",
+   "target": "S_EXEC",
+   "id": "S_e5b",
    "type": "smoothstep",
    "animated": true
   },
   {
    "source": "S_EXEC",
    "sourceHandle": "1",
-   "target": "V6_AUD",
+   "target": "V6_SUBS",
    "id": "S_e6",
    "type": "smoothstep",
    "animated": true
@@ -1816,8 +2204,24 @@
   {
    "source": "S_CRM",
    "sourceHandle": "1",
-   "target": "S_CENC",
+   "target": "S_CKEEPV",
    "id": "S_c3",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_CKEEPV",
+   "sourceHandle": "1",
+   "target": "S_CVTT",
+   "id": "S_c3k",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_CVTT",
+   "sourceHandle": "1",
+   "target": "S_CENC",
+   "id": "S_c3v",
    "type": "smoothstep",
    "animated": true
   },
@@ -1832,24 +2236,32 @@
   {
    "source": "S_CARGS",
    "sourceHandle": "1",
-   "target": "S_CEXEC",
+   "target": "S_CSTEREO",
    "id": "S_c5",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_CSTEREO",
+   "sourceHandle": "1",
+   "target": "S_CEXEC",
+   "id": "S_c5a",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_CSTEREO",
+   "sourceHandle": "2",
+   "target": "S_CEXEC",
+   "id": "S_c5b",
    "type": "smoothstep",
    "animated": true
   },
   {
    "source": "S_CEXEC",
    "sourceHandle": "1",
-   "target": "V6_AUD",
+   "target": "V6_SUBS",
    "id": "S_c6",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "S_CEXEC",
-   "sourceHandle": "err1",
-   "target": "V6_ORIG",
-   "id": "S_cerr",
    "type": "smoothstep",
    "animated": true
   },
@@ -1928,7 +2340,7 @@
   {
    "source": "V6_BRES",
    "sourceHandle": "1",
-   "target": "V6_AAC",
+   "target": "C_START",
    "id": "e_br1",
    "type": "smoothstep",
    "animated": true
@@ -1936,7 +2348,7 @@
   {
    "source": "V6_BRES",
    "sourceHandle": "2",
-   "target": "V6_AAC",
+   "target": "C_START",
    "id": "e_br2",
    "type": "smoothstep",
    "animated": true
@@ -1944,7 +2356,7 @@
   {
    "source": "V6_BRES",
    "sourceHandle": "3",
-   "target": "V6_AAC",
+   "target": "C_START",
    "id": "e_br3",
    "type": "smoothstep",
    "animated": true
@@ -1992,7 +2404,7 @@
   {
    "source": "V6_BRES",
    "sourceHandle": "9",
-   "target": "V6_AAC",
+   "target": "C_START",
    "id": "e_br9",
    "type": "smoothstep",
    "animated": true
@@ -2000,7 +2412,7 @@
   {
    "source": "V6_BR1080",
    "sourceHandle": "1",
-   "target": "V6_AAC",
+   "target": "C_START",
    "id": "e_b10a",
    "type": "smoothstep",
    "animated": true
@@ -2016,7 +2428,7 @@
   {
    "source": "V6_BR4K",
    "sourceHandle": "1",
-   "target": "V6_AAC",
+   "target": "C_START",
    "id": "e_b4a",
    "type": "smoothstep",
    "animated": true
@@ -2030,34 +2442,42 @@
    "animated": true
   },
   {
-   "source": "V6_AAC",
+   "source": "C_START",
    "sourceHandle": "1",
-   "target": "V6_2CH",
-   "id": "e_ac1",
+   "target": "C_VTT",
+   "id": "e_cs",
    "type": "smoothstep",
    "animated": true
   },
   {
-   "source": "V6_AAC",
+   "source": "C_VTT",
+   "sourceHandle": "1",
+   "target": "C_STEREO",
+   "id": "e_cv",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "C_STEREO",
+   "sourceHandle": "1",
+   "target": "C_EXEC",
+   "id": "e_cst1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "C_STEREO",
    "sourceHandle": "2",
-   "target": "V6_AUD",
-   "id": "e_ac2",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "V6_2CH",
-   "sourceHandle": "1",
    "target": "V6_COMPAT",
-   "id": "e_2c1",
+   "id": "e_cst2",
    "type": "smoothstep",
    "animated": true
   },
   {
-   "source": "V6_2CH",
-   "sourceHandle": "2",
-   "target": "V6_AUD",
-   "id": "e_2c2",
+   "source": "C_EXEC",
+   "sourceHandle": "1",
+   "target": "V6_SUBS",
+   "id": "e_cex",
    "type": "smoothstep",
    "animated": true
   },
@@ -2078,10 +2498,50 @@
    "animated": true
   },
   {
-   "source": "V6_AUD",
+   "source": "V6_SUBS",
+   "sourceHandle": "1",
+   "target": "V6_DUR",
+   "id": "e_sub1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_SUBS",
+   "sourceHandle": "2",
+   "target": "V6_SUBM",
+   "id": "e_sub2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_SUBM",
+   "sourceHandle": "1",
+   "target": "V6_DUR",
+   "id": "e_subm",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_DUR",
    "sourceHandle": "1",
    "target": "V6_SIZE",
-   "id": "e_aud",
+   "id": "e_d1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_DUR",
+   "sourceHandle": "2",
+   "target": "V6_DFAIL",
+   "id": "e_d2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_DUR",
+   "sourceHandle": "3",
+   "target": "V6_DFAIL",
+   "id": "e_d3",
    "type": "smoothstep",
    "animated": true
   },
@@ -2096,7 +2556,7 @@
   {
    "source": "V6_SIZE",
    "sourceHandle": "2",
-   "target": "V6_ORIG",
+   "target": "V6_FAIL",
    "id": "e_s2",
    "type": "smoothstep",
    "animated": true
@@ -2106,22 +2566,6 @@
    "sourceHandle": "1",
    "target": "V6_CLR",
    "id": "e_r1",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "V6_REPL",
-   "sourceHandle": "2",
-   "target": "V6_ORIG",
-   "id": "e_r2",
-   "type": "smoothstep",
-   "animated": true
-  },
-  {
-   "source": "V6_ORIG",
-   "sourceHandle": "1",
-   "target": "V6_KEEP",
-   "id": "e_orig",
    "type": "smoothstep",
    "animated": true
   },

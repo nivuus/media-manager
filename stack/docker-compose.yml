@@ -258,9 +258,14 @@ services:
         max-size: 10m
 
   tdarr:
-    image: ghcr.io/haveagitgat/tdarr:latest
-    labels:
-      com.centurylinklabs.watchtower.enable: true
+    # Pinned to an exact release, and the same one on the server and both
+    # nodes: the flow is built against the Community flow plugins this release
+    # ships, so a server, its nodes and the flow move together, through a
+    # release of this package followed by a canary requeue
+    # (docs/claude/tdarr.md). `latest` moved the server 2.94 -> 3.00 -> 3.01 in
+    # October with nothing in this repository changing. No watchtower label for
+    # the same reason.
+    image: ghcr.io/haveagitgat/tdarr:3.01.00
     restart: always
     # Passé de 2 à 4 cœurs et de 2 à 4 Go le 2026-08-24 : le serveur mettait
     # jusqu'à 106 s à répondre au POST /api/v2/update-node-relay (timeout node
@@ -300,9 +305,8 @@ services:
         max-size: 10m
 
   tdarr-node:
-    image: ghcr.io/haveagitgat/tdarr_node:latest
-    labels:
-      com.centurylinklabs.watchtower.enable: true
+    # Same release as the server (see the tdarr service).
+    image: ghcr.io/haveagitgat/tdarr_node:3.01.00
     # `unless-stopped` et non `always`, pour la meme raison que le node NVENC :
     # les hooks libvirt (/etc/libvirt/hooks/qemu.d/Windows/prepare/begin/10-cpu-confine.sh)
     # arretent ce conteneur pendant que la VM Windows tourne, et `always` le
@@ -338,7 +342,6 @@ services:
       - default
     volumes:
       - ./tdarr/configs:/app/configs
-      - ./tdarr/bin:/app/bin:ro
       - ./tdarr_cache:/temp
       - ${MEDIA_ROOT}:/media
     logging:
@@ -352,9 +355,8 @@ services:
   # `modprobe -r nvidia` : un conteneur tenant /dev/nvidia* bloque le détachement vfio.
   # D'où `unless-stopped` : il ne doit pas se relancer tout seul pendant que la VM tourne.
   tdarr-node-nvenc:
-    image: ghcr.io/haveagitgat/tdarr_node:latest
-    labels:
-      com.centurylinklabs.watchtower.enable: true
+    # Same release as the server (see the tdarr service).
+    image: ghcr.io/haveagitgat/tdarr_node:3.01.00
     restart: unless-stopped
     # Le second node d'encodage partage la RTX 4070 avec la VM Windows du
     # package console. Il n'a de sens que sur une machine qui a une carte
@@ -395,7 +397,6 @@ services:
       - default
     volumes:
       - ./tdarr/configs-nvenc:/app/configs
-      - ./tdarr/bin:/app/bin:ro
       - ./tdarr_cache:/temp
       - ${MEDIA_ROOT}:/media
     logging:

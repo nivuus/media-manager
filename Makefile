@@ -11,6 +11,7 @@
 
 PACKAGE_DIR := $(CURDIR)
 PYTHON ?= python3
+NODE ?= node
 
 .PHONY: test help
 
@@ -25,7 +26,10 @@ test:
 	          test_reset_error_rows test_reset_error_storage test_reset_error_trust \
 	          test_update_wanted test_run_log test_atomic_env \
 	          test_install_hook test_retired test_data_dirs test_safe_copy test_safe_copy_writes \
-	          test_activate_hook test_activate_waves test_lingarr_setup test_subtitles test_profiles; do \
+	          test_activate_hook test_activate_waves test_lingarr_setup test_subtitles test_profiles \
+	          test_tdarr_flow; do \
 	    echo "--- $$t"; \
 	    $(PYTHON) $(PACKAGE_DIR)/tests/$$t.py || exit 1; \
 	done
+	@echo "--- tdarr_plugins"
+	@$(NODE) --test $(PACKAGE_DIR)/tests/tdarr_plugins.test.cjs

@@ -1,0 +1,152 @@
+# Tdarr: the flow, its plugins, deploying and re-evaluating
+
+One flow, `OLED4K_norm_v6`, runs both production libraries. It is generated,
+never edited in the UI: `stack/scripts/tdarr/build_flow_v6.py` writes
+`stack/tdarr/flows/OLED4K_norm_v6.json`, and the build is reproducible (a
+rebuild of an unchanged script leaves no diff).
+
+## What the flow does
+
+Compatibility first, size second:
+
+- **Video** — kept when HEVC or H264 and under the bitrate guard (overall
+  bitrate, audio included: 1080p > 20 Mbps, 1440p/4K > 35 Mbps re-encode).
+  Anything else is re-encoded to HEVC: NVENC on `NvencNode`, QSV on
+  `MyInternalNode` (`checkNodeHardwareEncoder` picks per node), libx265 if the
+  GPU encode fails. HDR10 mastering metadata survives both encoders
+  (verified with ffprobe on output files). Dolby Vision is re-encoded as
+  HDR10: the RPU is lost.
+- **Audio** — every audio language gets one loudness-normalised AAC stereo
+  track at 48 kHz, titled `AAC 2.0 (normalized)`, and exactly one audio track
+  is flagged default (the stereo track of the primary language — the language
+  of the first default track). Decided by the Local plugin
+  `ensureStereoPerLanguage`, which groups tracks by their language tag
+  whatever it is; commentary and audio description are recognised by
+  disposition flags, never by title.
+- **Kept file** — on the compatibility path the file goes through
+  `Begin Command → setAsideUnreadableSubtitles → ensureStereoPerLanguage →
+  Execute`: a copy of every stream
+  plus the audio fix, or nothing at all when the file is already right
+  (`Already Compatible`). On the encode path the audio fix rides in the same
+  ffmpeg pass as the video.
+- **Secondary video** — `keepPrimaryVideo` drops every video stream but the
+  first (cover images excepted) before encoding. A Dolby Vision profile 7
+  enhancement layer, or an alternate 1080p version bundled with a 4K one,
+  used to be encoded into a useless second video track.
+- **DTS sources are decoded core-only** for the stereo downmix
+  (`-core_only:<index> 1`). FFmpeg's DTS decoder switches from fltp to s32p on
+  the last frame of some tracks; ffmpeg rebuilds the filter graph for that one
+  frame, a fresh loudnorm turns a lone silent frame into NaN and the AAC
+  encoder fails the job seconds before the end (4 films, October 2026,
+  reproduced on the last 120 s of each). The original DTS track is copied
+  untouched. A DTS-HD MA track without a core (rare) would fail visibly.
+- **Subtitles ffmpeg cannot read** — Matroska WebVTT (`S_TEXT/WEBVTT`) has no
+  codec in FFmpeg, which only knows the WebM IDs `D_WEBVTT/*` (checked on
+  release/7.1, release/8.0 and master in October 2026, so no upgrade fixes it).
+  Copied through ffmpeg, such a track makes the muxer refuse the header and
+  the job fails ("Subtitle codec 0 is not supported"). `setAsideUnreadableSubtitles`
+  takes those tracks out of every ffmpeg command and lists their track IDs in
+  the flow variable `unreadableSubtitleTracks`; after ffmpeg, `checkFlowVariable`
+  sends a non-empty list to `runCli`, where mkvmerge (shipped in the node
+  image) copies the tracks back from the original. 20 files of the library
+  carry such tracks (October 2026).
+- **Failures are failures** — a CPU fallback that fails too, an output whose
+  duration is not within 99.5–100.5 % of the original (`compareFileDurationRatio`),
+  or an output below 5 % of its size ends the job in `transcodeError` (no
+  `err1` edge, `failFlow`). Nothing routes a failure to "keep the original" as
+  a success.
+
+Plugin logic is tested outside Tdarr: `node --test tests/tdarr_plugins.test.cjs`
+(part of `make test`) drives the real `plugin()` entry points.
+`tests/test_tdarr_flow.py` walks the generated graph: no path reaches ffmpeg
+without setting subtitles aside, and no path replaces an original without the
+restore check, the duration guard and the size guard, in that order.
+
+## Versions are pinned, on purpose
+
+The server and both nodes run the same exact image tag (`docker-compose.yml`),
+and `deploy_tdarr.py` turns `pluginAutoUpdate` off (`GLOBAL_SETTINGS`). The
+flow is built against the Community flow plugins of one release; with
+`latest` the server moved 2.94 → 3.00 → 3.01 in October with nothing in this
+repository changing, and the plugin auto-update rewrites the code of every
+flow step on its own. Tdarr's internal server/node updater is inert in Docker
+unless `enableDockerAutoUpdater=true` is set, which it is not.
+
+To move to a new release: change the three tags together, release the
+package, deploy, run `deploy_tdarr.py --apply`, then a canary requeue
+(`requeue_outdated.py --match`) before the rest.
+
+## Failures are watched from Home Assistant
+
+Tdarr's own error notifications are off. The Home Assistant package
+`packages/tdarr.yaml` (in the home-manager config, not in this repository)
+reads the statistics document through `/api/v2/cruddb` every 5 minutes —
+`table3Count` is the number of files in "Transcode error", `table1Count` the
+queue — and notifies the phone when the error count goes up or when Tdarr has
+not answered for 30 minutes. A restart, which passes through `unavailable`,
+never alerts.
+
+## Why the audio was rebuilt everywhere (2026-10-07)
+
+The previous plugin, `addNormalizedStereo`, wrote its track from `0:a:0`
+only, whatever its language (3,731 multilingual files had a stereo track in
+one language), flagged it default without clearing the existing default
+(4,762 files with two), added a second one on the encode path when one was
+already there, and — loudnorm resampling to 192 kHz with nothing bringing it
+back — wrote every track as AAC at **96 kHz** (4,935 of 4,935). Its failures
+were swallowed: ffmpeg failing returned the input unchanged, as a success.
+Every one of those tracks is non-compliant for `ensureStereoPerLanguage`,
+which drops and rebuilds it; the legacy French title is how it recognises
+them.
+
+## Deploying a flow or plugin change
+
+```bash
+python3 stack/scripts/tdarr/build_flow_v6.py         # in the checkout, after editing it
+# ...commit, then deploy the stack (install hook / nivuus update), then on the host:
+cd /opt/nivuus/media-manager/scripts/tdarr
+python3 deploy_tdarr.py                              # dry run
+python3 deploy_tdarr.py --apply
+python3 requeue_outdated.py --match "Some Title" --apply   # canary, one path at a time
+python3 requeue_outdated.py --apply                        # the rest
+```
+
+Retiring a plugin and replacing the flow are not atomic: the install hook
+removes the old plugin, the nodes receive the new bundle, and until
+`deploy_tdarr.py --apply` runs the old flow still names the old plugin. A job
+started in that window fails with `Plugin does not exist: ...` (seen on
+2026-10-07 for three files, originals untouched); requeue those files once
+the flow is deployed.
+
+`requeue_outdated.py` reads the server database next to it, so it runs from
+the deployed copy (or with `--db`); from a checkout it has no database.
+
+`deploy_tdarr.py` talks to the server API (`/api/v2/cruddb`,
+`/api/v2/alter-worker-limit`), never to its SQLite file: the server keeps
+flows, libraries and nodes in memory, and a direct write is ignored or
+overwritten. It upserts the flow, points the production libraries at it,
+removes `SAMPLE*` test libraries and every flow no library uses, and sets
+`NODE_LIMITS`. Tdarr's own daily backups are under
+`tdarr/server/Tdarr/Backups/`.
+
+**A flow change re-evaluates nothing by itself.** Tdarr keeps each file's
+verdict; 102 files above the bitrate guard and 10 AV1 files stayed untouched
+for weeks because they were processed before the guard existed. Always run
+`requeue_outdated.py` after deploying: it requeues the production libraries,
+files due for re-encoding first, and a file already as required only costs a
+health check.
+
+Local plugins reach the nodes through `nodePlugins.Zip`, which the server
+rebuilds hourly. If its date stops moving, look for `Error zipping plugins
+folder` in the server log: the server (PUID) must be able to read the whole
+`Plugins` tree. Directories laid by the old `copytree`-based install were
+root-owned 0750 and blocked it from 2026-08-28 to 2026-10-07; `safe_copy.py`
+lays new ones 0755 but, by design, never re-stamps an existing directory.
+
+## Worker limits
+
+`NvencNode` runs 2 GPU transcode workers, matching its `cpus: 2`; it ran 5,
+mostly full-file remuxes that only added an audio track. `MyInternalNode`
+follows its hourly schedule (scheduler on). Limits live in the server
+database and survive restarts; change them through `deploy_tdarr.py`
+(`NODE_LIMITS`) so the repository stays the reference.

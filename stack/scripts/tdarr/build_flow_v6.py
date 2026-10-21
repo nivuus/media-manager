@@ -53,6 +53,23 @@ QUAL = {"SD":"22","720":"21","1080":"20","4K":"19"}
 #   NVENC -qp 22           -> 20.45 Mo / 0.983994  (même qualité, 6 % plus petit)
 # Soit un décalage constant de +2 sur l'échelle QSV. Recalibrer si l'encodeur change.
 NVQ = {k: str(int(v) + 2) for k, v in QUAL.items()}
+# Inputs of ensureStereoPerLanguage: EBU-style loudness target for the added
+# AAC stereo tracks.
+STEREO = {"i": "-16.0", "lra": "11.0", "tp": "-1.5", "bitrate": "256k"}
+# Subtitle tracks ffmpeg has no codec for (Matroska S_TEXT/WEBVTT) are taken
+# out of every ffmpeg command by setAsideUnreadableSubtitles, which lists their
+# track IDs in this flow variable; after ffmpeg, mkvmerge copies them back from
+# the original. Copying them through ffmpeg fails the whole job.
+UNREADABLE_SUBS = "args.variables.user.unreadableSubtitleTracks"
+MERGE_SUBS = {
+    "useCustomCliPath": False, "userCli": "mkvmerge", "doesCommandCreateOutputFile": True,
+    "userOutputFilePath": "${cacheDir}/${fileName}.mkv",
+    "cliArguments": ('-o "${outputFilePath}" "{{{args.inputFileObj._id}}}" '
+                     "--no-video --no-audio --no-attachments --no-chapters --no-global-tags "
+                     "--subtitle-tracks {{{" + UNREADABLE_SUBS + "}}} "
+                     '"{{{args.originalLibraryFile._id}}}"'),
+    "outputFileBecomesWorkingFile": True,
+}
 
 def encode_chain(p, color, x0):
     """Construit une chaîne NVENC|QSV + fallback CPU. Retourne l'id du nœud d'entrée.
@@ -67,6 +84,9 @@ def encode_chain(p, color, x0):
     add(node(f"{p}_MKV", f"Set MKV {p}", "ffmpegCommandSetContainer",
              inputs={"container": "mkv", "forceConform": True}, x=x0, y=560))
     add(node(f"{p}_RM", f"Remove Data {p}", "ffmpegCommandRemoveDataStreams", x=x0, y=620))
+    add(node(f"{p}_KEEPV", f"Keep Primary Video {p}", "keepPrimaryVideo", repo="Local", x=x0, y=635))
+    add(node(f"{p}_VTT", f"Set Aside Unreadable Subs {p}", "setAsideUnreadableSubtitles", repo="Local",
+             x=x0, y=642))
     add(node(f"{p}_NCHK", f"Node has NVENC? {p}", "checkNodeHardwareEncoder",
              inputs={"hardwareEncoder": "hevc_nvenc"}, x=x0, y=650))
     # --- sous-chaîne NVENC (sortie 1 : le node a la RTX) ---
@@ -77,6 +97,8 @@ def encode_chain(p, color, x0):
     add(node(f"{p}_NENC", f"Enc NVENC HEVC {p}", "ffmpegCommandSetVideoEncoder", inputs=NVENC_ENC, x=x0-300, y=800))
     add(node(f"{p}_NARGS", f"Args NVENC {p}", "ffmpegCommandCustomArguments",
              inputs={"inputArguments": "", "outputArguments": (color + MUX).strip()}, x=x0-300, y=860))
+    add(node(f"{p}_NSTEREO", f"Stereo per language NVENC {p}", "ensureStereoPerLanguage", repo="Local",
+             inputs=STEREO, x=x0-300, y=890))
     add(node(f"{p}_NEXEC", f"Exec NVENC {p}", "ffmpegCommandExecute", x=x0-300, y=920))
     # --- sous-chaîne QSV (sortie 2 : pas de NVENC sur ce node) ---
     add(node(f"{p}_RES", f"Check Resolution {p}", "checkVideoResolution", x=x0, y=680))
@@ -86,38 +108,52 @@ def encode_chain(p, color, x0):
     add(node(f"{p}_ENC", f"Enc QSV HEVC 10bit {p}", "ffmpegCommandSetVideoEncoder", inputs=QSV_ENC, x=x0, y=800))
     add(node(f"{p}_ARGS", f"Args QSV {p}", "ffmpegCommandCustomArguments",
              inputs={"inputArguments": "", "outputArguments": (color + MUX).strip()}, x=x0, y=860))
+    add(node(f"{p}_STEREO", f"Stereo per language QSV {p}", "ensureStereoPerLanguage", repo="Local",
+             inputs=STEREO, x=x0, y=890))
     add(node(f"{p}_EXEC", f"Exec QSV {p}", "ffmpegCommandExecute", x=x0, y=920))
     add(node(f"{p}_CSTART", f"Begin CPU {p}", "ffmpegCommandStart", x=x0+300, y=920))
     add(node(f"{p}_CMKV", f"Set MKV CPU {p}", "ffmpegCommandSetContainer",
              inputs={"container": "mkv", "forceConform": True}, x=x0+300, y=980))
     add(node(f"{p}_CRM", f"Remove Data CPU {p}", "ffmpegCommandRemoveDataStreams", x=x0+300, y=1040))
+    add(node(f"{p}_CKEEPV", f"Keep Primary Video CPU {p}", "keepPrimaryVideo", repo="Local", x=x0+300, y=1070))
+    add(node(f"{p}_CVTT", f"Set Aside Unreadable Subs CPU {p}", "setAsideUnreadableSubtitles",
+             repo="Local", x=x0+300, y=1085))
     add(node(f"{p}_CENC", f"Enc CPU libx265 {p}", "ffmpegCommandSetVideoEncoder", inputs=CPU_ENC, x=x0+300, y=1100))
     add(node(f"{p}_CARGS", f"Args CPU {p}", "ffmpegCommandCustomArguments",
              inputs={"inputArguments": "", "outputArguments": (color + MUX).strip()}, x=x0+300, y=1160))
+    add(node(f"{p}_CSTEREO", f"Stereo per language CPU {p}", "ensureStereoPerLanguage", repo="Local",
+             inputs=STEREO, x=x0+300, y=1190))
     add(node(f"{p}_CEXEC", f"Exec CPU {p}", "ffmpegCommandExecute", x=x0+300, y=1220))
     # câblage commun + aiguillage par node
     link(f"{p}_START", 1, f"{p}_MKV", f"{p}_e1"); link(f"{p}_MKV", 1, f"{p}_RM", f"{p}_e2")
-    link(f"{p}_RM", 1, f"{p}_NCHK", f"{p}_e3")
+    link(f"{p}_RM", 1, f"{p}_KEEPV", f"{p}_e3"); link(f"{p}_KEEPV", 1, f"{p}_VTT", f"{p}_e3k")
+    link(f"{p}_VTT", 1, f"{p}_NCHK", f"{p}_e3v")
     link(f"{p}_NCHK", 1, f"{p}_NRES", f"{p}_n0"); link(f"{p}_NCHK", 2, f"{p}_RES", f"{p}_n1")
     # câblage NVENC
     for h, key in RES_MAP:
         link(f"{p}_NRES", h, f"{p}_N{key}", f"{p}_nr{h}")
     for key in ("SD", "720", "1080", "4K"):
         link(f"{p}_N{key}", 1, f"{p}_NENC", f"{p}_nq{key}")
-    link(f"{p}_NENC", 1, f"{p}_NARGS", f"{p}_n4"); link(f"{p}_NARGS", 1, f"{p}_NEXEC", f"{p}_n5")
-    link(f"{p}_NEXEC", 1, "V6_AUD", f"{p}_n6"); link(f"{p}_NEXEC", "err1", f"{p}_CSTART", f"{p}_nerr")
+    link(f"{p}_NENC", 1, f"{p}_NARGS", f"{p}_n4"); link(f"{p}_NARGS", 1, f"{p}_NSTEREO", f"{p}_n5")
+    link(f"{p}_NSTEREO", 1, f"{p}_NEXEC", f"{p}_n5a"); link(f"{p}_NSTEREO", 2, f"{p}_NEXEC", f"{p}_n5b")
+    link(f"{p}_NEXEC", 1, "V6_SUBS", f"{p}_n6"); link(f"{p}_NEXEC", "err1", f"{p}_CSTART", f"{p}_nerr")
     # câblage QSV
     for h, key in RES_MAP:
         link(f"{p}_RES", h, f"{p}_{key}", f"{p}_er{h}")
     for key in ("SD", "720", "1080", "4K"):
         link(f"{p}_{key}", 1, f"{p}_ENC", f"{p}_eq{key}")
-    link(f"{p}_ENC", 1, f"{p}_ARGS", f"{p}_e4"); link(f"{p}_ARGS", 1, f"{p}_EXEC", f"{p}_e5")
-    link(f"{p}_EXEC", 1, "V6_AUD", f"{p}_e6"); link(f"{p}_EXEC", "err1", f"{p}_CSTART", f"{p}_eerr")
+    link(f"{p}_ENC", 1, f"{p}_ARGS", f"{p}_e4"); link(f"{p}_ARGS", 1, f"{p}_STEREO", f"{p}_e5")
+    link(f"{p}_STEREO", 1, f"{p}_EXEC", f"{p}_e5a"); link(f"{p}_STEREO", 2, f"{p}_EXEC", f"{p}_e5b")
+    link(f"{p}_EXEC", 1, "V6_SUBS", f"{p}_e6"); link(f"{p}_EXEC", "err1", f"{p}_CSTART", f"{p}_eerr")
     # câblage CPU
     link(f"{p}_CSTART", 1, f"{p}_CMKV", f"{p}_c1"); link(f"{p}_CMKV", 1, f"{p}_CRM", f"{p}_c2")
-    link(f"{p}_CRM", 1, f"{p}_CENC", f"{p}_c3"); link(f"{p}_CENC", 1, f"{p}_CARGS", f"{p}_c4")
-    link(f"{p}_CARGS", 1, f"{p}_CEXEC", f"{p}_c5")
-    link(f"{p}_CEXEC", 1, "V6_AUD", f"{p}_c6"); link(f"{p}_CEXEC", "err1", "V6_ORIG", f"{p}_cerr")
+    link(f"{p}_CRM", 1, f"{p}_CKEEPV", f"{p}_c3"); link(f"{p}_CKEEPV", 1, f"{p}_CVTT", f"{p}_c3k")
+    link(f"{p}_CVTT", 1, f"{p}_CENC", f"{p}_c3v")
+    link(f"{p}_CENC", 1, f"{p}_CARGS", f"{p}_c4"); link(f"{p}_CARGS", 1, f"{p}_CSTEREO", f"{p}_c5")
+    link(f"{p}_CSTEREO", 1, f"{p}_CEXEC", f"{p}_c5a"); link(f"{p}_CSTEREO", 2, f"{p}_CEXEC", f"{p}_c5b")
+    # A CPU failure after a GPU failure is an error, not a reason to keep the
+    # original quietly: no err1 edge, so the job ends as transcodeError.
+    link(f"{p}_CEXEC", 1, "V6_SUBS", f"{p}_c6")
     return f"{p}_START"
 
 # --- entrée + aiguillage ---
@@ -125,20 +161,19 @@ add(node("V6_IN", "Input File", "inputFile", x=500, y=0))
 add(node("V6_HC", "Run Health Check", "runHealthCheck", x=500, y=100))
 add(node("V6_MED", "Check File Medium", "checkFileMedium", inputs={"medium": "video"}, x=500, y=200))
 add(node("V6_SKIP", "Skip", "comment", inputs={"comment": "Fichier laissé tel quel"}, x=1200, y=200))
-# --- garde-fou de COMPATIBILITÉ (objectif : compat > taille) ---
-# Un fichier est « déjà compatible » s'il a une vidéo HEVC ou H264 ET une piste AAC
-# stéréo. Dans ce cas on garde l'original tel quel (pas de ré-encode inutile). Sinon
-# on produit la version compatible, quitte à ce qu'elle soit plus grosse :
-#   - vidéo pas HEVC/H264 (AV1, VC1, MPEG4…) -> ré-encode HEVC + piste AAC stéréo
-#   - vidéo OK mais pas de piste AAC stéréo   -> on ajoute juste la piste (pas de ré-encode)
-# checkVideoCodec/checkAudioCodec/checkChannelCount : sortie 1 = présent, 2 = absent.
+# --- COMPATIBILITY guard (goal: compatibility over size) ---
+# A file is "already compatible" when its video is HEVC or H264 AND every audio
+# language has an AAC stereo track AND exactly one audio track is default. The
+# audio half is decided by the Local plugin ensureStereoPerLanguage, not by
+# checkAudioCodec + checkChannelCount: those two only proved that SOME AAC track
+# and SOME 2-channel stream existed, not that they were the same track, nor that
+# each language had one.
+#   - video neither HEVC nor H264 (AV1, VC1, MPEG4...) -> HEVC re-encode
+#   - video fine but audio not as required -> copy everything, fix the audio
 add(node("V6_VHEVC", "Video is HEVC?", "checkVideoCodec", inputs={"codec": "hevc"}, x=500, y=250))
 add(node("V6_VH264", "Video is H264?", "checkVideoCodec", inputs={"codec": "h264"}, x=350, y=300))
-add(node("V6_AAC", "Has AAC track?", "checkAudioCodec",
-         inputs={"codec": "aac", "checkBitrate": False}, x=650, y=300))
-add(node("V6_2CH", "Has stereo track?", "checkChannelCount", inputs={"channelCount": "2"}, x=650, y=360))
 add(node("V6_COMPAT", "Already Compatible", "comment",
-         inputs={"comment": "Vidéo HEVC/H264 + piste AAC stéréo déjà présente -> original conservé"}, x=1200, y=300))
+         inputs={"comment": "HEVC/H264 video and a normalised AAC stereo track per language: original kept"}, x=1200, y=300))
 # --- garde-fou BITRATE (compat-first MAIS on ré-encode les fichiers obèses) ---
 # Un codec compatible (HEVC/H264) n'est PLUS gardé aveuglément : s'il est trop gros
 # pour sa résolution (REMUX 4K à 50-80 Mbps, BluRay 1080p lourds), on le ré-encode
@@ -153,31 +188,36 @@ add(node("V6_BR1080", "1080p bitrate > 20 Mbps?", "checkOverallBitrate",
 add(node("V6_BR4K", "4K bitrate > 35 Mbps?", "checkOverallBitrate",
          inputs={"unit": "mbps", "greaterThan": 0, "lessThan": 35}, x=600, y=500))
 add(node("V6_HDR", "Check HDR Video", "checkHdr", x=350, y=400))
-# NB : le plugin Local dvReencodeQsv est retiré du flow actif (bug CLI non testé
-# faisait crasher les workers). HDR/DV -> chaîne HDR QSV (plugins Community
-# éprouvés). DV re-encodé en HDR10 (RPU perdu) ; préservation DV = chantier v6.2.
-# --- post-traitement commun ---
-# Piste AAC stéréo normalisée ajoutée après l'encode vidéo (pistes originales
-# conservées, Atmos préservé). Plugin Local validé ; fallback = fichier inchangé.
-add(node("V6_AUD", "Add Normalized Stereo (AAC)", "addNormalizedStereo", repo="Local",
-         inputs={"i": "-16.0", "lra": "11.0", "tp": "-1.5", "bitrate": "256k"}, x=1000, y=1260))
-# compareFileSizeRatio : sortie 1 = taille DANS la plage (on remplace), 2 = hors plage
-# (on garde l'original). Compat > taille : plus de borne haute (on prend le résultat même
-# plus gros). Seule reste la borne basse anti-corruption : < 5 % de l'original = sortie
-# tronquée/corrompue -> on garde l'original. (One Piece à 24 %, Mandalorian à 24 % passent.)
+# Dolby Vision is re-encoded as HDR10 (RPU lost); only the base layer is kept,
+# keepPrimaryVideo drops a profile 7 enhancement-layer track.
+# --- compatibility path: copy every stream, fix the audio only if needed ---
+add(node("C_START", "Begin Audio Fix", "ffmpegCommandStart", x=900, y=560))
+add(node("C_VTT", "Set Aside Unreadable Subs", "setAsideUnreadableSubtitles", repo="Local", x=900, y=590))
+add(node("C_STEREO", "Stereo per language", "ensureStereoPerLanguage", repo="Local",
+         inputs=STEREO, x=900, y=620))
+add(node("C_EXEC", "Exec Audio Fix", "ffmpegCommandExecute", x=900, y=680))
+# compareFileSizeRatio: output 1 = size WITHIN range (replace), 2 = out of range.
+# Compatibility over size: no upper bound (a bigger result is taken). Only the
+# anti-corruption lower bound remains: < 5 % of the original = truncated output.
+# A truncated output is a failure and is reported as one (failFlow), never turned
+# into a silent "original kept" success.
+add(node("V6_SUBS", "Unreadable subs set aside?", "checkFlowVariable",
+         inputs={"variable": UNREADABLE_SUBS, "condition": "==", "value": ""}, x=1000, y=1200))
+add(node("V6_SUBM", "Restore subs (mkvmerge)", "runCli", inputs=MERGE_SUBS, x=1300, y=1230))
+# compareFileDurationRatio: output 1 = within [99.5 %, 100.5 %] of the original,
+# 2 = shorter, 3 = longer. A job that lost or gained running time is a failure.
+add(node("V6_DUR", "Check File Duration Ratio", "compareFileDurationRatio",
+         inputs={"greaterThan": "99.5", "lessThan": "100.5"}, x=1000, y=1260))
+add(node("V6_DFAIL", "Fail: duration differs", "failFlow", x=1300, y=1290))
 add(node("V6_SIZE", "Check File Size Ratio", "compareFileSizeRatio",
          inputs={"greaterThan": 5, "lessThan": 100000}, x=1000, y=1320))
-# Toute branche « on garde l'original » DOIT repasser par setWorkingFile : sinon le
-# flow se termine avec le fichier de travail encore dans le cache, ce que Tdarr
-# refuse -> verdict transcodeError (et le fichier compte comme un échec).
-add(node("V6_ORIG", "Reset Working File", "setWorkingFile",
-         inputs={"source": "originalFile", "customPath": ""}, x=1300, y=1260))
-add(node("V6_KEEP", "Keep Original", "comment",
-         inputs={"comment": "Sortie corrompue/suspecte (< 5 %) -> original conservé"}, x=1300, y=1320))
+add(node("V6_FAIL", "Fail: output truncated", "failFlow", x=1300, y=1320))
 add(node("V6_REPL", "Replace Original File", "replaceOriginalFile", x=1000, y=1380))
 add(node("V6_CLR", "Clear Cache", "clearCache", x=1000, y=1440))
 add(node("V6_OK", "Success", "comment",
-         inputs={"comment": "HEVC (NVENC ou QSV selon le node) + toutes pistes copiées (Atmos ok). HDR10 tags conservés. Piste AAC stéréo normalisée ajoutée."}, x=1000, y=1500))
+         inputs={"comment": "HEVC (NVENC or QSV per node) or original video, every other stream copied, "
+                            "HDR10 metadata kept, one normalised AAC stereo track per language, "
+                            "subtitles ffmpeg cannot read restored by mkvmerge."}, x=1000, y=1500))
 # --- chaînes d'encodage ---
 hdr = encode_chain("H", "-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc ", 700)
 sdr = encode_chain("S", "", 1600)
@@ -189,27 +229,32 @@ link("V6_MED", 1, "V6_VHEVC", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
 link("V6_VHEVC", 1, "V6_BRES", "e_vh1"); link("V6_VHEVC", 2, "V6_VH264", "e_vh2")
 # vidéo H264 ? -> oui : garde-fou bitrate ; non (ni HEVC ni H264) : ré-encoder (Path C)
 link("V6_VH264", 1, "V6_BRES", "e_v41"); link("V6_VH264", 2, "V6_HDR", "e_v42")
-# garde-fou bitrate : split résolution -> check du débit -> sous seuil = audio compat, au-dessus = ré-encode
-# checkVideoResolution handles : 1=480p 2=576p 3=720p 4=1080p 5=1440p 6=4KUHD 7=DCI4K 8=8KUHD 9=other
-link("V6_BRES", 1, "V6_AAC", "e_br1"); link("V6_BRES", 2, "V6_AAC", "e_br2")
-link("V6_BRES", 3, "V6_AAC", "e_br3")                 # 720p -> jamais ré-encodé
+# bitrate guard: split by resolution -> check the bitrate -> under the threshold = compat path, above = re-encode
+# checkVideoResolution handles (checked against the plugin source, Tdarr 2.94):
+# 1=480p 2=576p 3=720p 4=1080p 5=1440p 6=4KUHD 7=DCI4K 8=8KUHD 9=other
+link("V6_BRES", 1, "C_START", "e_br1"); link("V6_BRES", 2, "C_START", "e_br2")
+link("V6_BRES", 3, "C_START", "e_br3")                # 720p -> never re-encoded
 link("V6_BRES", 4, "V6_BR1080", "e_br4")              # 1080p -> check 20 Mbps
 link("V6_BRES", 5, "V6_BR4K", "e_br5")                # 1440p -> seuil 4K (35 Mbps)
 link("V6_BRES", 6, "V6_BR4K", "e_br6"); link("V6_BRES", 7, "V6_BR4K", "e_br7")
-link("V6_BRES", 8, "V6_BR4K", "e_br8"); link("V6_BRES", 9, "V6_AAC", "e_br9")
-# sortie 1 = sous le seuil (on garde -> audio compat) ; sortie 2 = au-dessus (on ré-encode)
-link("V6_BR1080", 1, "V6_AAC", "e_b10a"); link("V6_BR1080", 2, "V6_HDR", "e_b10b")
-link("V6_BR4K", 1, "V6_AAC", "e_b4a"); link("V6_BR4K", 2, "V6_HDR", "e_b4b")
-# a une piste AAC ? -> oui : vérifier qu'il y a du stéréo ; non : ajouter la piste (Path B)
-link("V6_AAC", 1, "V6_2CH", "e_ac1"); link("V6_AAC", 2, "V6_AUD", "e_ac2")
-# a une piste 2 canaux ? -> oui : déjà compatible, on garde ; non : ajouter la piste (Path B)
-link("V6_2CH", 1, "V6_COMPAT", "e_2c1"); link("V6_2CH", 2, "V6_AUD", "e_2c2")
+link("V6_BRES", 8, "V6_BR4K", "e_br8"); link("V6_BRES", 9, "C_START", "e_br9")
+# output 1 = under the threshold (kept -> compat path); output 2 = above (re-encoded)
+link("V6_BR1080", 1, "C_START", "e_b10a"); link("V6_BR1080", 2, "V6_HDR", "e_b10b")
+link("V6_BR4K", 1, "C_START", "e_b4a"); link("V6_BR4K", 2, "V6_HDR", "e_b4b")
+# compat path: output 1 = the audio needs fixing, output 2 = nothing to do
+link("C_START", 1, "C_VTT", "e_cs")
+link("C_VTT", 1, "C_STEREO", "e_cv")
+link("C_STEREO", 1, "C_EXEC", "e_cst1"); link("C_STEREO", 2, "V6_COMPAT", "e_cst2")
+link("C_EXEC", 1, "V6_SUBS", "e_cex")
 # Path C : ré-encode -> split HDR/SDR
 link("V6_HDR", 1, hdr, "e_hdr1"); link("V6_HDR", 2, sdr, "e_hdr2")
-link("V6_AUD", 1, "V6_SIZE", "e_aud")
-link("V6_SIZE", 1, "V6_REPL", "e_s1"); link("V6_SIZE", 2, "V6_ORIG", "e_s2")
-link("V6_REPL", 1, "V6_CLR", "e_r1"); link("V6_REPL", 2, "V6_ORIG", "e_r2")
-link("V6_ORIG", 1, "V6_KEEP", "e_orig")
+# checkFlowVariable: output 1 = the variable is empty (nothing set aside).
+link("V6_SUBS", 1, "V6_DUR", "e_sub1"); link("V6_SUBS", 2, "V6_SUBM", "e_sub2")
+link("V6_SUBM", 1, "V6_DUR", "e_subm")
+link("V6_DUR", 1, "V6_SIZE", "e_d1")
+link("V6_DUR", 2, "V6_DFAIL", "e_d2"); link("V6_DUR", 3, "V6_DFAIL", "e_d3")
+link("V6_SIZE", 1, "V6_REPL", "e_s1"); link("V6_SIZE", 2, "V6_FAIL", "e_s2")
+link("V6_REPL", 1, "V6_CLR", "e_r1")
 link("V6_CLR", 1, "V6_OK", "e_cl1")
 
 flow = {"_id": "OLED4K_norm_v6", "name": "OLED4K norm v6 - Compat-first HEVC/H264+AAC (NVENC+QSV) [CANONICAL]",
