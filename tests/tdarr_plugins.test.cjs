@@ -26,6 +26,7 @@ require.cache['tdarr-methods-lib'] = {
 
 const stereo = require(path.join(PLUGINS, 'audio/ensureStereoPerLanguage/1.0.0/index.js'));
 const keepVideo = require(path.join(PLUGINS, 'video/keepPrimaryVideo/1.0.0/index.js'));
+const setAside = require(path.join(PLUGINS, 'subtitles/setAsideUnreadableSubtitles/1.0.0/index.js'));
 
 const video = (index, extra = {}) => ({ index, codec_type: 'video', codec_name: 'hevc', width: 3840, height: 2160, ...extra });
 const audio = (index, lang, codec, channels, extra = {}) => ({
@@ -187,4 +188,39 @@ test('keepPrimaryVideo drops a second video track but keeps cover images', () =>
     video(3, { codec_name: 'mjpeg', width: 600, height: 882 }),
   ]);
   assert.deepEqual(streams.filter((s) => s.removed).map((s) => s.index), [1]);
+});
+
+// A Matroska S_TEXT/WEBVTT track: ffmpeg has no codec for it, so Tdarr stores
+// no codec_name (the ffprobe CLI prints "unknown").
+const webvtt = (index, lang, extra = {}) => ({ index, codec_type: 'subtitle', tags: { language: lang }, disposition: { default: 0 }, ...extra });
+
+test('setAsideUnreadableSubtitles drops WebVTT tracks from the command and records them', () => {
+  const { result, streams, command, logs } = run(setAside, [
+    video(0), audio(1, 'fre', 'eac3', 6), sub(2, 'fre'), webvtt(3, 'fre'), webvtt(4, 'eng', { codec_name: 'unknown' }),
+  ]);
+  assert.deepEqual(streams.filter((s) => s.removed).map((s) => s.index), [3, 4]);
+  assert.equal(result.variables.user.unreadableSubtitleTracks, '3,4');
+  assert.equal(result.outputNumber, 1);
+  assert.equal(command.shouldProcess, false, 'setting tracks aside is no reason to process a file');
+  assert.equal(logs.length, 2);
+});
+
+test('setAsideUnreadableSubtitles clears a stale value when every subtitle is readable', () => {
+  const probed = [video(0), audio(1, 'eng', 'aac', 2), sub(2, 'eng')];
+  const logs = [];
+  const args = {
+    inputs: {}, inputFileObj: { _id: '/media/x.mkv' }, jobLog: (m) => logs.push(m),
+    variables: {
+      user: { unreadableSubtitleTracks: '5', quality: '20' },
+      ffmpegCommand: { init: true, shouldProcess: false, streams: probed.map((s) => ({ ...s, removed: false })) },
+    },
+  };
+  const result = setAside.plugin(args);
+  assert.equal(result.variables.user.unreadableSubtitleTracks, '');
+  assert.equal(result.variables.user.quality, '20', 'other flow variables are kept');
+  assert.equal(args.variables.ffmpegCommand.streams.some((s) => s.removed), false);
+});
+
+test('setAsideUnreadableSubtitles refuses to run before Begin Command', () => {
+  assert.throws(() => setAside.plugin({ inputs: {}, jobLog: () => {}, variables: {} }), /Begin Command/);
 });

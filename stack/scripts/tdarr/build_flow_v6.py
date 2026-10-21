@@ -56,6 +56,20 @@ NVQ = {k: str(int(v) + 2) for k, v in QUAL.items()}
 # Inputs of ensureStereoPerLanguage: EBU-style loudness target for the added
 # AAC stereo tracks.
 STEREO = {"i": "-16.0", "lra": "11.0", "tp": "-1.5", "bitrate": "256k"}
+# Subtitle tracks ffmpeg has no codec for (Matroska S_TEXT/WEBVTT) are taken
+# out of every ffmpeg command by setAsideUnreadableSubtitles, which lists their
+# track IDs in this flow variable; after ffmpeg, mkvmerge copies them back from
+# the original. Copying them through ffmpeg fails the whole job.
+UNREADABLE_SUBS = "args.variables.user.unreadableSubtitleTracks"
+MERGE_SUBS = {
+    "useCustomCliPath": False, "userCli": "mkvmerge", "doesCommandCreateOutputFile": True,
+    "userOutputFilePath": "${cacheDir}/${fileName}.mkv",
+    "cliArguments": ('-o "${outputFilePath}" "{{{args.inputFileObj._id}}}" '
+                     "--no-video --no-audio --no-attachments --no-chapters --no-global-tags "
+                     "--subtitle-tracks {{{" + UNREADABLE_SUBS + "}}} "
+                     '"{{{args.originalLibraryFile._id}}}"'),
+    "outputFileBecomesWorkingFile": True,
+}
 
 def encode_chain(p, color, x0):
     """Construit une chaîne NVENC|QSV + fallback CPU. Retourne l'id du nœud d'entrée.
@@ -71,6 +85,8 @@ def encode_chain(p, color, x0):
              inputs={"container": "mkv", "forceConform": True}, x=x0, y=560))
     add(node(f"{p}_RM", f"Remove Data {p}", "ffmpegCommandRemoveDataStreams", x=x0, y=620))
     add(node(f"{p}_KEEPV", f"Keep Primary Video {p}", "keepPrimaryVideo", repo="Local", x=x0, y=635))
+    add(node(f"{p}_VTT", f"Set Aside Unreadable Subs {p}", "setAsideUnreadableSubtitles", repo="Local",
+             x=x0, y=642))
     add(node(f"{p}_NCHK", f"Node has NVENC? {p}", "checkNodeHardwareEncoder",
              inputs={"hardwareEncoder": "hevc_nvenc"}, x=x0, y=650))
     # --- sous-chaîne NVENC (sortie 1 : le node a la RTX) ---
@@ -100,6 +116,8 @@ def encode_chain(p, color, x0):
              inputs={"container": "mkv", "forceConform": True}, x=x0+300, y=980))
     add(node(f"{p}_CRM", f"Remove Data CPU {p}", "ffmpegCommandRemoveDataStreams", x=x0+300, y=1040))
     add(node(f"{p}_CKEEPV", f"Keep Primary Video CPU {p}", "keepPrimaryVideo", repo="Local", x=x0+300, y=1070))
+    add(node(f"{p}_CVTT", f"Set Aside Unreadable Subs CPU {p}", "setAsideUnreadableSubtitles",
+             repo="Local", x=x0+300, y=1085))
     add(node(f"{p}_CENC", f"Enc CPU libx265 {p}", "ffmpegCommandSetVideoEncoder", inputs=CPU_ENC, x=x0+300, y=1100))
     add(node(f"{p}_CARGS", f"Args CPU {p}", "ffmpegCommandCustomArguments",
              inputs={"inputArguments": "", "outputArguments": (color + MUX).strip()}, x=x0+300, y=1160))
@@ -108,7 +126,8 @@ def encode_chain(p, color, x0):
     add(node(f"{p}_CEXEC", f"Exec CPU {p}", "ffmpegCommandExecute", x=x0+300, y=1220))
     # câblage commun + aiguillage par node
     link(f"{p}_START", 1, f"{p}_MKV", f"{p}_e1"); link(f"{p}_MKV", 1, f"{p}_RM", f"{p}_e2")
-    link(f"{p}_RM", 1, f"{p}_KEEPV", f"{p}_e3"); link(f"{p}_KEEPV", 1, f"{p}_NCHK", f"{p}_e3k")
+    link(f"{p}_RM", 1, f"{p}_KEEPV", f"{p}_e3"); link(f"{p}_KEEPV", 1, f"{p}_VTT", f"{p}_e3k")
+    link(f"{p}_VTT", 1, f"{p}_NCHK", f"{p}_e3v")
     link(f"{p}_NCHK", 1, f"{p}_NRES", f"{p}_n0"); link(f"{p}_NCHK", 2, f"{p}_RES", f"{p}_n1")
     # câblage NVENC
     for h, key in RES_MAP:
@@ -117,7 +136,7 @@ def encode_chain(p, color, x0):
         link(f"{p}_N{key}", 1, f"{p}_NENC", f"{p}_nq{key}")
     link(f"{p}_NENC", 1, f"{p}_NARGS", f"{p}_n4"); link(f"{p}_NARGS", 1, f"{p}_NSTEREO", f"{p}_n5")
     link(f"{p}_NSTEREO", 1, f"{p}_NEXEC", f"{p}_n5a"); link(f"{p}_NSTEREO", 2, f"{p}_NEXEC", f"{p}_n5b")
-    link(f"{p}_NEXEC", 1, "V6_SIZE", f"{p}_n6"); link(f"{p}_NEXEC", "err1", f"{p}_CSTART", f"{p}_nerr")
+    link(f"{p}_NEXEC", 1, "V6_SUBS", f"{p}_n6"); link(f"{p}_NEXEC", "err1", f"{p}_CSTART", f"{p}_nerr")
     # câblage QSV
     for h, key in RES_MAP:
         link(f"{p}_RES", h, f"{p}_{key}", f"{p}_er{h}")
@@ -125,15 +144,16 @@ def encode_chain(p, color, x0):
         link(f"{p}_{key}", 1, f"{p}_ENC", f"{p}_eq{key}")
     link(f"{p}_ENC", 1, f"{p}_ARGS", f"{p}_e4"); link(f"{p}_ARGS", 1, f"{p}_STEREO", f"{p}_e5")
     link(f"{p}_STEREO", 1, f"{p}_EXEC", f"{p}_e5a"); link(f"{p}_STEREO", 2, f"{p}_EXEC", f"{p}_e5b")
-    link(f"{p}_EXEC", 1, "V6_SIZE", f"{p}_e6"); link(f"{p}_EXEC", "err1", f"{p}_CSTART", f"{p}_eerr")
+    link(f"{p}_EXEC", 1, "V6_SUBS", f"{p}_e6"); link(f"{p}_EXEC", "err1", f"{p}_CSTART", f"{p}_eerr")
     # câblage CPU
     link(f"{p}_CSTART", 1, f"{p}_CMKV", f"{p}_c1"); link(f"{p}_CMKV", 1, f"{p}_CRM", f"{p}_c2")
-    link(f"{p}_CRM", 1, f"{p}_CKEEPV", f"{p}_c3"); link(f"{p}_CKEEPV", 1, f"{p}_CENC", f"{p}_c3k")
+    link(f"{p}_CRM", 1, f"{p}_CKEEPV", f"{p}_c3"); link(f"{p}_CKEEPV", 1, f"{p}_CVTT", f"{p}_c3k")
+    link(f"{p}_CVTT", 1, f"{p}_CENC", f"{p}_c3v")
     link(f"{p}_CENC", 1, f"{p}_CARGS", f"{p}_c4"); link(f"{p}_CARGS", 1, f"{p}_CSTEREO", f"{p}_c5")
     link(f"{p}_CSTEREO", 1, f"{p}_CEXEC", f"{p}_c5a"); link(f"{p}_CSTEREO", 2, f"{p}_CEXEC", f"{p}_c5b")
     # A CPU failure after a GPU failure is an error, not a reason to keep the
     # original quietly: no err1 edge, so the job ends as transcodeError.
-    link(f"{p}_CEXEC", 1, "V6_SIZE", f"{p}_c6")
+    link(f"{p}_CEXEC", 1, "V6_SUBS", f"{p}_c6")
     return f"{p}_START"
 
 # --- entrée + aiguillage ---
@@ -172,6 +192,7 @@ add(node("V6_HDR", "Check HDR Video", "checkHdr", x=350, y=400))
 # keepPrimaryVideo drops a profile 7 enhancement-layer track.
 # --- compatibility path: copy every stream, fix the audio only if needed ---
 add(node("C_START", "Begin Audio Fix", "ffmpegCommandStart", x=900, y=560))
+add(node("C_VTT", "Set Aside Unreadable Subs", "setAsideUnreadableSubtitles", repo="Local", x=900, y=590))
 add(node("C_STEREO", "Stereo per language", "ensureStereoPerLanguage", repo="Local",
          inputs=STEREO, x=900, y=620))
 add(node("C_EXEC", "Exec Audio Fix", "ffmpegCommandExecute", x=900, y=680))
@@ -180,6 +201,14 @@ add(node("C_EXEC", "Exec Audio Fix", "ffmpegCommandExecute", x=900, y=680))
 # reste la borne basse anti-corruption : < 5 % de l'original = sortie tronquée.
 # A truncated output is a failure and is reported as one (failFlow), never turned
 # into a silent "original kept" success.
+add(node("V6_SUBS", "Unreadable subs set aside?", "checkFlowVariable",
+         inputs={"variable": UNREADABLE_SUBS, "condition": "==", "value": ""}, x=1000, y=1200))
+add(node("V6_SUBM", "Restore subs (mkvmerge)", "runCli", inputs=MERGE_SUBS, x=1300, y=1230))
+# compareFileDurationRatio: output 1 = within [99.5 %, 100.5 %] of the original,
+# 2 = shorter, 3 = longer. A job that lost or gained running time is a failure.
+add(node("V6_DUR", "Check File Duration Ratio", "compareFileDurationRatio",
+         inputs={"greaterThan": "99.5", "lessThan": "100.5"}, x=1000, y=1260))
+add(node("V6_DFAIL", "Fail: duration differs", "failFlow", x=1300, y=1290))
 add(node("V6_SIZE", "Check File Size Ratio", "compareFileSizeRatio",
          inputs={"greaterThan": 5, "lessThan": 100000}, x=1000, y=1320))
 add(node("V6_FAIL", "Fail: output truncated", "failFlow", x=1300, y=1320))
@@ -187,7 +216,8 @@ add(node("V6_REPL", "Replace Original File", "replaceOriginalFile", x=1000, y=13
 add(node("V6_CLR", "Clear Cache", "clearCache", x=1000, y=1440))
 add(node("V6_OK", "Success", "comment",
          inputs={"comment": "HEVC (NVENC or QSV per node) or original video, every other stream copied, "
-                            "HDR10 metadata kept, one normalised AAC stereo track per language."}, x=1000, y=1500))
+                            "HDR10 metadata kept, one normalised AAC stereo track per language, "
+                            "subtitles ffmpeg cannot read restored by mkvmerge."}, x=1000, y=1500))
 # --- chaînes d'encodage ---
 hdr = encode_chain("H", "-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc ", 700)
 sdr = encode_chain("S", "", 1600)
@@ -212,11 +242,17 @@ link("V6_BRES", 8, "V6_BR4K", "e_br8"); link("V6_BRES", 9, "C_START", "e_br9")
 link("V6_BR1080", 1, "C_START", "e_b10a"); link("V6_BR1080", 2, "V6_HDR", "e_b10b")
 link("V6_BR4K", 1, "C_START", "e_b4a"); link("V6_BR4K", 2, "V6_HDR", "e_b4b")
 # compat path: output 1 = the audio needs fixing, output 2 = nothing to do
-link("C_START", 1, "C_STEREO", "e_cs")
+link("C_START", 1, "C_VTT", "e_cs")
+link("C_VTT", 1, "C_STEREO", "e_cv")
 link("C_STEREO", 1, "C_EXEC", "e_cst1"); link("C_STEREO", 2, "V6_COMPAT", "e_cst2")
-link("C_EXEC", 1, "V6_SIZE", "e_cex")
+link("C_EXEC", 1, "V6_SUBS", "e_cex")
 # Path C : ré-encode -> split HDR/SDR
 link("V6_HDR", 1, hdr, "e_hdr1"); link("V6_HDR", 2, sdr, "e_hdr2")
+# checkFlowVariable: output 1 = the variable is empty (nothing set aside).
+link("V6_SUBS", 1, "V6_DUR", "e_sub1"); link("V6_SUBS", 2, "V6_SUBM", "e_sub2")
+link("V6_SUBM", 1, "V6_DUR", "e_subm")
+link("V6_DUR", 1, "V6_SIZE", "e_d1")
+link("V6_DUR", 2, "V6_DFAIL", "e_d2"); link("V6_DUR", 3, "V6_DFAIL", "e_d3")
 link("V6_SIZE", 1, "V6_REPL", "e_s1"); link("V6_SIZE", 2, "V6_FAIL", "e_s2")
 link("V6_REPL", 1, "V6_CLR", "e_r1")
 link("V6_CLR", 1, "V6_OK", "e_cl1")

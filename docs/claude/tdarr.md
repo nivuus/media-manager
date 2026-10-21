@@ -24,7 +24,8 @@ Compatibility first, size second:
   whatever it is; commentary and audio description are recognised by
   disposition flags, never by title.
 - **Kept file** — on the compatibility path the file goes through
-  `Begin Command → ensureStereoPerLanguage → Execute`: a copy of every stream
+  `Begin Command → setAsideUnreadableSubtitles → ensureStereoPerLanguage →
+  Execute`: a copy of every stream
   plus the audio fix, or nothing at all when the file is already right
   (`Already Compatible`). On the encode path the audio fix rides in the same
   ffmpeg pass as the video.
@@ -32,12 +33,51 @@ Compatibility first, size second:
   first (cover images excepted) before encoding. A Dolby Vision profile 7
   enhancement layer, or an alternate 1080p version bundled with a 4K one,
   used to be encoded into a useless second video track.
-- **Failures are failures** — a CPU fallback that fails too, or an output
-  below 5 % of the original, ends the job in `transcodeError` (no `err1` edge,
-  `failFlow`). Nothing routes a failure to "keep the original" as a success.
+- **Subtitles ffmpeg cannot read** — Matroska WebVTT (`S_TEXT/WEBVTT`) has no
+  codec in FFmpeg, which only knows the WebM IDs `D_WEBVTT/*` (checked on
+  release/7.1, release/8.0 and master in October 2026, so no upgrade fixes it).
+  Copied through ffmpeg, such a track makes the muxer refuse the header and
+  the job fails ("Subtitle codec 0 is not supported"). `setAsideUnreadableSubtitles`
+  takes those tracks out of every ffmpeg command and lists their track IDs in
+  the flow variable `unreadableSubtitleTracks`; after ffmpeg, `checkFlowVariable`
+  sends a non-empty list to `runCli`, where mkvmerge (shipped in the node
+  image) copies the tracks back from the original. 20 files of the library
+  carry such tracks (October 2026).
+- **Failures are failures** — a CPU fallback that fails too, an output whose
+  duration is not within 99.5–100.5 % of the original (`compareFileDurationRatio`),
+  or an output below 5 % of its size ends the job in `transcodeError` (no
+  `err1` edge, `failFlow`). Nothing routes a failure to "keep the original" as
+  a success.
 
 Plugin logic is tested outside Tdarr: `node --test tests/tdarr_plugins.test.cjs`
 (part of `make test`) drives the real `plugin()` entry points.
+`tests/test_tdarr_flow.py` walks the generated graph: no path reaches ffmpeg
+without setting subtitles aside, and no path replaces an original without the
+restore check, the duration guard and the size guard, in that order.
+
+## Versions are pinned, on purpose
+
+The server and both nodes run the same exact image tag (`docker-compose.yml`),
+and `deploy_tdarr.py` turns `pluginAutoUpdate` off (`GLOBAL_SETTINGS`). The
+flow is built against the Community flow plugins of one release; with
+`latest` the server moved 2.94 → 3.00 → 3.01 in October with nothing in this
+repository changing, and the plugin auto-update rewrites the code of every
+flow step on its own. Tdarr's internal server/node updater is inert in Docker
+unless `enableDockerAutoUpdater=true` is set, which it is not.
+
+To move to a new release: change the three tags together, release the
+package, deploy, run `deploy_tdarr.py --apply`, then a canary requeue
+(`requeue_outdated.py --match`) before the rest.
+
+## Failures are watched from Home Assistant
+
+Tdarr's own error notifications are off. The Home Assistant package
+`packages/tdarr.yaml` (in the home-manager config, not in this repository)
+reads the statistics document through `/api/v2/cruddb` every 5 minutes —
+`table3Count` is the number of files in "Transcode error", `table1Count` the
+queue — and notifies the phone when the error count goes up or when Tdarr has
+not answered for 30 minutes. A restart, which passes through `unavailable`,
+never alerts.
 
 ## Why the audio was rebuilt everywhere (2026-10-07)
 

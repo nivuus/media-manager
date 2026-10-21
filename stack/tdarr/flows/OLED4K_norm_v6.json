@@ -178,6 +178,19 @@
    "inputsDB": {}
   },
   {
+   "name": "Set Aside Unreadable Subs",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "C_VTT",
+   "position": {
+    "x": 900,
+    "y": 590
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
    "name": "Stereo per language",
    "sourceRepo": "Local",
    "pluginName": "ensureStereoPerLanguage",
@@ -204,6 +217,72 @@
    "position": {
     "x": 900,
     "y": 680
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Unreadable subs set aside?",
+   "sourceRepo": "Community",
+   "pluginName": "checkFlowVariable",
+   "version": "1.0.0",
+   "id": "V6_SUBS",
+   "position": {
+    "x": 1000,
+    "y": 1200
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "variable": "args.variables.user.unreadableSubtitleTracks",
+    "condition": "==",
+    "value": ""
+   }
+  },
+  {
+   "name": "Restore subs (mkvmerge)",
+   "sourceRepo": "Community",
+   "pluginName": "runCli",
+   "version": "1.0.0",
+   "id": "V6_SUBM",
+   "position": {
+    "x": 1300,
+    "y": 1230
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "useCustomCliPath": false,
+    "userCli": "mkvmerge",
+    "doesCommandCreateOutputFile": true,
+    "userOutputFilePath": "${cacheDir}/${fileName}.mkv",
+    "cliArguments": "-o \"${outputFilePath}\" \"{{{args.inputFileObj._id}}}\" --no-video --no-audio --no-attachments --no-chapters --no-global-tags --subtitle-tracks {{{args.variables.user.unreadableSubtitleTracks}}} \"{{{args.originalLibraryFile._id}}}\"",
+    "outputFileBecomesWorkingFile": true
+   }
+  },
+  {
+   "name": "Check File Duration Ratio",
+   "sourceRepo": "Community",
+   "pluginName": "compareFileDurationRatio",
+   "version": "1.0.0",
+   "id": "V6_DUR",
+   "position": {
+    "x": 1000,
+    "y": 1260
+   },
+   "fpEnabled": true,
+   "inputsDB": {
+    "greaterThan": "99.5",
+    "lessThan": "100.5"
+   }
+  },
+  {
+   "name": "Fail: duration differs",
+   "sourceRepo": "Community",
+   "pluginName": "failFlow",
+   "version": "1.0.0",
+   "id": "V6_DFAIL",
+   "position": {
+    "x": 1300,
+    "y": 1290
    },
    "fpEnabled": true,
    "inputsDB": {}
@@ -275,7 +354,7 @@
    },
    "fpEnabled": true,
    "inputsDB": {
-    "comment": "HEVC (NVENC or QSV per node) or original video, every other stream copied, HDR10 metadata kept, one normalised AAC stereo track per language."
+    "comment": "HEVC (NVENC or QSV per node) or original video, every other stream copied, HDR10 metadata kept, one normalised AAC stereo track per language, subtitles ffmpeg cannot read restored by mkvmerge."
    }
   },
   {
@@ -329,6 +408,19 @@
    "position": {
     "x": 700,
     "y": 635
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Set Aside Unreadable Subs H",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "H_VTT",
+   "position": {
+    "x": 700,
+    "y": 642
    },
    "fpEnabled": true,
    "inputsDB": {}
@@ -696,6 +788,19 @@
    "inputsDB": {}
   },
   {
+   "name": "Set Aside Unreadable Subs CPU H",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "H_CVTT",
+   "position": {
+    "x": 1000,
+    "y": 1085
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
    "name": "Enc CPU libx265 H",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandSetVideoEncoder",
@@ -816,6 +921,19 @@
    "position": {
     "x": 1600,
     "y": 635
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
+   "name": "Set Aside Unreadable Subs S",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "S_VTT",
+   "position": {
+    "x": 1600,
+    "y": 642
    },
    "fpEnabled": true,
    "inputsDB": {}
@@ -1183,6 +1301,19 @@
    "inputsDB": {}
   },
   {
+   "name": "Set Aside Unreadable Subs CPU S",
+   "sourceRepo": "Local",
+   "pluginName": "setAsideUnreadableSubtitles",
+   "version": "1.0.0",
+   "id": "S_CVTT",
+   "position": {
+    "x": 1900,
+    "y": 1085
+   },
+   "fpEnabled": true,
+   "inputsDB": {}
+  },
+  {
    "name": "Enc CPU libx265 S",
    "sourceRepo": "Community",
    "pluginName": "ffmpegCommandSetVideoEncoder",
@@ -1281,8 +1412,16 @@
   {
    "source": "H_KEEPV",
    "sourceHandle": "1",
-   "target": "H_NCHK",
+   "target": "H_VTT",
    "id": "H_e3k",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_VTT",
+   "sourceHandle": "1",
+   "target": "H_NCHK",
+   "id": "H_e3v",
    "type": "smoothstep",
    "animated": true
   },
@@ -1441,7 +1580,7 @@
   {
    "source": "H_NEXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_SUBS",
    "id": "H_n6",
    "type": "smoothstep",
    "animated": true
@@ -1593,7 +1732,7 @@
   {
    "source": "H_EXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_SUBS",
    "id": "H_e6",
    "type": "smoothstep",
    "animated": true
@@ -1633,8 +1772,16 @@
   {
    "source": "H_CKEEPV",
    "sourceHandle": "1",
-   "target": "H_CENC",
+   "target": "H_CVTT",
    "id": "H_c3k",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "H_CVTT",
+   "sourceHandle": "1",
+   "target": "H_CENC",
+   "id": "H_c3v",
    "type": "smoothstep",
    "animated": true
   },
@@ -1673,7 +1820,7 @@
   {
    "source": "H_CEXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_SUBS",
    "id": "H_c6",
    "type": "smoothstep",
    "animated": true
@@ -1705,8 +1852,16 @@
   {
    "source": "S_KEEPV",
    "sourceHandle": "1",
-   "target": "S_NCHK",
+   "target": "S_VTT",
    "id": "S_e3k",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_VTT",
+   "sourceHandle": "1",
+   "target": "S_NCHK",
+   "id": "S_e3v",
    "type": "smoothstep",
    "animated": true
   },
@@ -1865,7 +2020,7 @@
   {
    "source": "S_NEXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_SUBS",
    "id": "S_n6",
    "type": "smoothstep",
    "animated": true
@@ -2017,7 +2172,7 @@
   {
    "source": "S_EXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_SUBS",
    "id": "S_e6",
    "type": "smoothstep",
    "animated": true
@@ -2057,8 +2212,16 @@
   {
    "source": "S_CKEEPV",
    "sourceHandle": "1",
-   "target": "S_CENC",
+   "target": "S_CVTT",
    "id": "S_c3k",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "S_CVTT",
+   "sourceHandle": "1",
+   "target": "S_CENC",
+   "id": "S_c3v",
    "type": "smoothstep",
    "animated": true
   },
@@ -2097,7 +2260,7 @@
   {
    "source": "S_CEXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_SUBS",
    "id": "S_c6",
    "type": "smoothstep",
    "animated": true
@@ -2281,8 +2444,16 @@
   {
    "source": "C_START",
    "sourceHandle": "1",
-   "target": "C_STEREO",
+   "target": "C_VTT",
    "id": "e_cs",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "C_VTT",
+   "sourceHandle": "1",
+   "target": "C_STEREO",
+   "id": "e_cv",
    "type": "smoothstep",
    "animated": true
   },
@@ -2305,7 +2476,7 @@
   {
    "source": "C_EXEC",
    "sourceHandle": "1",
-   "target": "V6_SIZE",
+   "target": "V6_SUBS",
    "id": "e_cex",
    "type": "smoothstep",
    "animated": true
@@ -2323,6 +2494,54 @@
    "sourceHandle": "2",
    "target": "S_START",
    "id": "e_hdr2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_SUBS",
+   "sourceHandle": "1",
+   "target": "V6_DUR",
+   "id": "e_sub1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_SUBS",
+   "sourceHandle": "2",
+   "target": "V6_SUBM",
+   "id": "e_sub2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_SUBM",
+   "sourceHandle": "1",
+   "target": "V6_DUR",
+   "id": "e_subm",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_DUR",
+   "sourceHandle": "1",
+   "target": "V6_SIZE",
+   "id": "e_d1",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_DUR",
+   "sourceHandle": "2",
+   "target": "V6_DFAIL",
+   "id": "e_d2",
+   "type": "smoothstep",
+   "animated": true
+  },
+  {
+   "source": "V6_DUR",
+   "sourceHandle": "3",
+   "target": "V6_DFAIL",
+   "id": "e_d3",
    "type": "smoothstep",
    "animated": true
   },
