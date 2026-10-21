@@ -196,9 +196,9 @@ add(node("C_VTT", "Set Aside Unreadable Subs", "setAsideUnreadableSubtitles", re
 add(node("C_STEREO", "Stereo per language", "ensureStereoPerLanguage", repo="Local",
          inputs=STEREO, x=900, y=620))
 add(node("C_EXEC", "Exec Audio Fix", "ffmpegCommandExecute", x=900, y=680))
-# compareFileSizeRatio : sortie 1 = taille DANS la plage (on remplace), 2 = hors plage.
-# Compat > taille : plus de borne haute (on prend le résultat même plus gros). Seule
-# reste la borne basse anti-corruption : < 5 % de l'original = sortie tronquée.
+# compareFileSizeRatio: output 1 = size WITHIN range (replace), 2 = out of range.
+# Compatibility over size: no upper bound (a bigger result is taken). Only the
+# anti-corruption lower bound remains: < 5 % of the original = truncated output.
 # A truncated output is a failure and is reported as one (failFlow), never turned
 # into a silent "original kept" success.
 add(node("V6_SUBS", "Unreadable subs set aside?", "checkFlowVariable",
@@ -229,16 +229,16 @@ link("V6_MED", 1, "V6_VHEVC", "e_med1"); link("V6_MED", 2, "V6_SKIP", "e_med2")
 link("V6_VHEVC", 1, "V6_BRES", "e_vh1"); link("V6_VHEVC", 2, "V6_VH264", "e_vh2")
 # vidéo H264 ? -> oui : garde-fou bitrate ; non (ni HEVC ni H264) : ré-encoder (Path C)
 link("V6_VH264", 1, "V6_BRES", "e_v41"); link("V6_VH264", 2, "V6_HDR", "e_v42")
-# garde-fou bitrate : split résolution -> check du débit -> sous seuil = compat path, au-dessus = ré-encode
+# bitrate guard: split by resolution -> check the bitrate -> under the threshold = compat path, above = re-encode
 # checkVideoResolution handles (checked against the plugin source, Tdarr 2.94):
 # 1=480p 2=576p 3=720p 4=1080p 5=1440p 6=4KUHD 7=DCI4K 8=8KUHD 9=other
 link("V6_BRES", 1, "C_START", "e_br1"); link("V6_BRES", 2, "C_START", "e_br2")
-link("V6_BRES", 3, "C_START", "e_br3")                # 720p -> jamais ré-encodé
+link("V6_BRES", 3, "C_START", "e_br3")                # 720p -> never re-encoded
 link("V6_BRES", 4, "V6_BR1080", "e_br4")              # 1080p -> check 20 Mbps
 link("V6_BRES", 5, "V6_BR4K", "e_br5")                # 1440p -> seuil 4K (35 Mbps)
 link("V6_BRES", 6, "V6_BR4K", "e_br6"); link("V6_BRES", 7, "V6_BR4K", "e_br7")
 link("V6_BRES", 8, "V6_BR4K", "e_br8"); link("V6_BRES", 9, "C_START", "e_br9")
-# sortie 1 = sous le seuil (on garde -> compat path) ; sortie 2 = au-dessus (on ré-encode)
+# output 1 = under the threshold (kept -> compat path); output 2 = above (re-encoded)
 link("V6_BR1080", 1, "C_START", "e_b10a"); link("V6_BR1080", 2, "V6_HDR", "e_b10b")
 link("V6_BR4K", 1, "C_START", "e_b4a"); link("V6_BR4K", 2, "V6_HDR", "e_b4b")
 # compat path: output 1 = the audio needs fixing, output 2 = nothing to do
