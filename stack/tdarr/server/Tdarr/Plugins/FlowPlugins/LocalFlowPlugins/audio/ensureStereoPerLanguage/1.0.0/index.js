@@ -18,6 +18,15 @@ const OWN_TITLE = 'AAC 2.0 (normalized)';
 // back, so every one of them is AAC at 96 kHz. They are rebuilt.
 const LEGACY_OWN_TITLES = ['AAC 2.0 (normalisé)'];
 const SAMPLE_RATE = 48000;
+// The DTS decoder (FFmpeg 7.1) emits fltp from the core and s32p/s16p from the
+// extensions, and switches format on the last frame of some tracks. ffmpeg then
+// rebuilds the filter graph for that single frame, a fresh loudnorm turns a
+// lone silent frame into NaN, and the AAC encoder fails the job seconds before
+// the end ("Input contains (near) NaN/+-Inf"). Decoding the core only keeps one
+// format for the whole track; the core (up to 1.5 Mbit/s) is far beyond what a
+// 256k stereo downmix needs, and the original DTS track is copied untouched.
+const coreOnlyArgs = (source) => (source.codec_name === 'dts'
+  ? [`-core_only:${source.index}`, '1'] : []);
 
 const details = () => ({
   name: 'Ensure Stereo Per Language',
@@ -157,7 +166,7 @@ const plugin = (args) => {
       tags: Object.assign({}, source.tags, { title: OWN_TITLE }),
       disposition: Object.assign({}, source.disposition, { default: isDefault ? 1 : 0 }),
       mapArgs: ['-map', `0:${a.sourceIndex}`],
-      inputArgs: [],
+      inputArgs: coreOnlyArgs(source),
       outputArgs: [
         '-c:{outputIndex}', 'aac',
         '-b:{outputIndex}', String(bitrate),

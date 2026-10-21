@@ -224,3 +224,16 @@ test('setAsideUnreadableSubtitles clears a stale value when every subtitle is re
 test('setAsideUnreadableSubtitles refuses to run before Begin Command', () => {
   assert.throws(() => setAside.plugin({ inputs: {}, jobLog: () => {}, variables: {} }), /Begin Command/);
 });
+
+// The DTS decoder emits its last frame in s32p after fltp; ffmpeg rebuilds the
+// filter graph for that one frame, and loudnorm turns a lone silent frame into
+// NaN, which the AAC encoder rejects (4 jobs failed seconds before the end).
+// Decoding the DTS core only keeps one sample format for the whole stream.
+test('a DTS source is decoded core-only, other codecs are left alone', () => {
+  const { streams } = run(stereo, [
+    video(0), audio(1, 'fre', 'eac3', 6), audio(2, 'rus', 'dts', 6),
+  ]);
+  const byLang = Object.fromEntries(added(streams).map((s) => [s.tags.language, s]));
+  assert.deepEqual(byLang.rus.inputArgs, ['-core_only:2', '1']);
+  assert.deepEqual(byLang.fre.inputArgs, []);
+});

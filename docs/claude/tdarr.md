@@ -33,6 +33,13 @@ Compatibility first, size second:
   first (cover images excepted) before encoding. A Dolby Vision profile 7
   enhancement layer, or an alternate 1080p version bundled with a 4K one,
   used to be encoded into a useless second video track.
+- **DTS sources are decoded core-only** for the stereo downmix
+  (`-core_only:<index> 1`). FFmpeg's DTS decoder switches from fltp to s32p on
+  the last frame of some tracks; ffmpeg rebuilds the filter graph for that one
+  frame, a fresh loudnorm turns a lone silent frame into NaN and the AAC
+  encoder fails the job seconds before the end (4 films, October 2026,
+  reproduced on the last 120 s of each). The original DTS track is copied
+  untouched. A DTS-HD MA track without a core (rare) would fail visibly.
 - **Subtitles ffmpeg cannot read** — Matroska WebVTT (`S_TEXT/WEBVTT`) has no
   codec in FFmpeg, which only knows the WebM IDs `D_WEBVTT/*` (checked on
   release/7.1, release/8.0 and master in October 2026, so no upgrade fixes it).
