@@ -13,8 +13,10 @@ TROIS REGLES PORTENT LE RESTE.
    reecrirait detruirait tout cela sans bruit — et cette phase tourne aussi
    sur une machine deja installee (la bascule de production passe par
    `install.py --root /`). Les cles absentes sont AJOUTEES, les presentes ne
-   sont pas touchees. One exception (add_profiles): a profile the
-   answers turn on is added to COMPOSE_PROFILES, never removed.
+   sont pas touchees. Two exceptions: a profile the answers turn on is
+   added to COMPOSE_PROFILES, never removed (add_profiles); turning
+   translation on fills its endpoint, model and key where they are empty,
+   never where they are set (fill_empty_values).
 
 2. LES GID SONT LUS SUR LA CIBLE. group_add supposait video=44 et render=105.
    video=44 est stable sur Debian, render ne l'est pas (104, 105 ou 106 selon
@@ -168,6 +170,36 @@ def add_profiles(text, wanted):
     return "".join(lines)
 
 
+def fill_empty_values(text, values):
+    """The .env with each key of `values` filled where its value is EMPTY.
+
+    The second exception to rule 1, for values a fresh install renders empty
+    on purpose: the translation endpoint, model and key are always rendered
+    since 1.4.0, empty while translation is off, so merge_env() alone left
+    them empty when it was turned on later. Only the last assignment counts
+    (it is the one compose reads); a non-empty value, or an empty answer,
+    changes nothing. Quoting and every other line are kept.
+    """
+    lines = text.splitlines(keepends=True)
+    last = {}
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            last[stripped.partition("=")[0].strip()] = i
+    for key, wanted in values.items():
+        if not wanted or key not in last:
+            continue
+        index = last[key]
+        name, _, value = lines[index].rstrip("\n").partition("=")
+        value = value.strip()
+        quote = value[0] if len(value) == 2 and value[0] == value[1] and value[0] in "'\"" else ""
+        if value and not quote:
+            continue
+        newline = "\n" if lines[index].endswith("\n") else ""
+        lines[index] = f"{name}={quote}{wanted}{quote}{newline}"
+    return "".join(lines)
+
+
 def env_identity(text):
     """(uid, gid) that compose will run non-root services as, from a .env text.
 
@@ -277,6 +309,10 @@ def install(root, answers):
     if os.path.isfile(env_path):
         with open(env_path) as fh:
             rendered = add_profiles(merge_env(fh.read(), rendered), profiles)
+        if subtitle_translation:
+            rendered = fill_empty_values(rendered, {key: subtitle_env[key] for key in (
+                "SUBTITLE_TRANSLATION_ENDPOINT", "SUBTITLE_TRANSLATION_MODEL",
+                "SUBTITLE_TRANSLATION_API_KEY")})
         emit({"event": "progress", "pct": 70,
               "msg": ".env existant conserve, variables manquantes ajoutees"})
     # Docker would create these as root, unwritable by a non-root service.

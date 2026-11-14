@@ -47,7 +47,10 @@ Maintainerr. Never publish it on another interface.
 
 Record the answers (`nivuus answers media-manager subtitle_translation=true
 subtitle_translation_endpoint=... subtitle_translation_model=...`), then lay
-the package again. The install hook adds the missing `SUBTITLE_*` values and
+the package again. The install hook adds the missing `SUBTITLE_*` values,
+fills the endpoint, model and API key from the answers where the existing
+`.env` has them empty — a `.env` rendered with translation off has them
+empty — without ever replacing a value already set (`fill_empty_values`), and
 adds `lingarr` to the existing `COMPOSE_PROFILES` (`add_profiles` in
 `hooks/install.py`). It never removes a profile: turning Lingarr off again is
 a hand edit of `COMPOSE_PROFILES`, as for `usenet`.

@@ -70,6 +70,67 @@ with tempfile.TemporaryDirectory() as root:
           ["COMPOSE_PROFILES=usenet,nvenc,lingarr"])
     check("install: other values untouched", "RADARR_API_KEY=keep-me" in text, True)
 
+
+# --- Turned on later, from a .env the hook itself rendered ----------------
+# The case above starts from a .env that predates the SUBTITLE_* keys. The
+# real starting state is a .env this hook rendered with translation off:
+# since 1.4.0 the keys are always there, empty. The endpoint and the model
+# must then be filled from the answers, or Lingarr starts and fails every job.
+def run_install(root, answers):
+    return subprocess.run(
+        [sys.executable, str(REPO / "hooks" / "install.py"),
+         "--phase", "install", "--root", root],
+        input=context(answers), capture_output=True, text=True, cwd=str(REPO))
+
+
+def env_values(text):
+    values = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key, _, value = stripped.partition("=")
+            values[key.strip()] = value.strip()
+    return values
+
+
+ON = dict(ANSWERS, subtitle_translation=True,
+          subtitle_translation_endpoint="http://h/v1/chat/completions",
+          subtitle_translation_model="m", subtitle_translation_api_key="k")
+with tempfile.TemporaryDirectory() as root:
+    fake_group_file(root)
+    env = pathlib.Path(root) / "opt/nivuus/media-manager/.env"
+    first = run_install(root, ANSWERS)
+    check("off then on: first install", (first.returncode, first.stderr), (0, ""))
+    before = env_values(env.read_text())
+    check("off then on: keys rendered empty",
+          [before.get(k) for k in ("SUBTITLE_TRANSLATION_ENDPOINT", "SUBTITLE_TRANSLATION_MODEL")],
+          ["", ""])
+    second = run_install(root, ON)
+    check("off then on: second install", (second.returncode, second.stderr), (0, ""))
+    after = env_values(env.read_text())
+    check("off then on: endpoint, model and key filled",
+          [after.get(k) for k in ("SUBTITLE_TRANSLATION_ENDPOINT", "SUBTITLE_TRANSLATION_MODEL",
+                                  "SUBTITLE_TRANSLATION_API_KEY")],
+          ["http://h/v1/chat/completions", "m", "k"])
+    check("off then on: profile added", "lingarr" in after.get("COMPOSE_PROFILES", ""), True)
+
+    # A value already set is the operator's: other answers never replace it.
+    third = run_install(root, dict(ON, subtitle_translation_endpoint="http://other/v1",
+                                   subtitle_translation_model="other"))
+    check("set values: third install", (third.returncode, third.stderr), (0, ""))
+    kept = env_values(env.read_text())
+    check("set values: never replaced",
+          [kept.get(k) for k in ("SUBTITLE_TRANSLATION_ENDPOINT", "SUBTITLE_TRANSLATION_MODEL")],
+          ["http://h/v1/chat/completions", "m"])
+
+check("fill: last assignment, quotes and other lines kept",
+      install.fill_empty_values('A=1\nE=x\nE=""\nM=\n', {"E": "e", "M": "m", "N": "n"}),
+      'A=1\nE=x\nE="e"\nM=m\n')
+check("fill: a non-empty value is kept",
+      install.fill_empty_values("E=set\n", {"E": "e"}), "E=set\n")
+check("fill: an empty answer fills nothing",
+      install.fill_empty_values("E=\n", {"E": ""}), "E=\n")
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)
