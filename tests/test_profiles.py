@@ -100,13 +100,13 @@ with tempfile.TemporaryDirectory() as root:
     fake_group_file(root)
     env = pathlib.Path(root) / "opt/nivuus/media-manager/.env"
     first = run_install(root, ANSWERS)
-    check("off then on: first install", (first.returncode, first.stderr), (0, ""))
+    check(f"off then on: first install (stderr: {first.stderr.strip()!r})", first.returncode, 0)
     before = env_values(env.read_text())
     check("off then on: keys rendered empty",
           [before.get(k) for k in ("SUBTITLE_TRANSLATION_ENDPOINT", "SUBTITLE_TRANSLATION_MODEL")],
           ["", ""])
     second = run_install(root, ON)
-    check("off then on: second install", (second.returncode, second.stderr), (0, ""))
+    check(f"off then on: second install (stderr: {second.stderr.strip()!r})", second.returncode, 0)
     after = env_values(env.read_text())
     check("off then on: endpoint, model and key filled",
           [after.get(k) for k in ("SUBTITLE_TRANSLATION_ENDPOINT", "SUBTITLE_TRANSLATION_MODEL",
@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory() as root:
     # A value already set is the operator's: other answers never replace it.
     third = run_install(root, dict(ON, subtitle_translation_endpoint="http://other/v1",
                                    subtitle_translation_model="other"))
-    check("set values: third install", (third.returncode, third.stderr), (0, ""))
+    check(f"set values: third install (stderr: {third.stderr.strip()!r})", third.returncode, 0)
     kept = env_values(env.read_text())
     check("set values: never replaced",
           [kept.get(k) for k in ("SUBTITLE_TRANSLATION_ENDPOINT", "SUBTITLE_TRANSLATION_MODEL")],

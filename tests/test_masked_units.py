@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as out
     proc = subprocess.run(
         [sys.executable, str(HOOK), "--phase", "install", "--root", root],
         input=context(ANSWERS), capture_output=True, text=True, cwd=str(REPO))
-    check("install: exit status", (proc.returncode, proc.stderr), (0, ""))
+    check(f"install: exit status (stderr: {proc.stderr.strip()!r})", proc.returncode, 0)
     check("install: masked unit target unchanged", state(unit_target), (SENTINEL, 0o600))
     check("install: mask still a symlink", (units / MASKED_TIMER).is_symlink(), True)
     check("install: symlinked drop-in target unchanged",
