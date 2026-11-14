@@ -59,11 +59,19 @@ IMPORT_PENDING_STATES = ('importPending', 'importBlocked')
 # blocklist so Radarr/Sonarr grabs a DIFFERENT release instead of re-grabbing
 # the same broken one on the next cycle (that infinite loop was caused by
 # deleting without blocklisting).
-BAD_RELEASE_KEYWORDS = [
+# The messages that say the download's files are absent. Radarr and Sonarr
+# send "No files found are eligible for import in <path>" for an output path
+# that holds nothing OR does not exist (CompletedDownloadService, after
+# ProcessPath returns no result), so on an import-pending row they condemn
+# the release only while its presence on disk is known: with the media disk
+# missing they describe the disk, not the release.
+ABSENCE_KEYWORDS = [
     'has been removed',
     'missing from disk',
     'file not found',
     'no files found',
+]
+BAD_RELEASE_KEYWORDS = ABSENCE_KEYWORDS + [
     'unpack failed',
     'unpacking failed',
     'corrupt',
@@ -94,7 +102,8 @@ def classify_item(item, now, download_present=None):
     `download_present` says whether the row's download is still on disk: True,
     False, or None when that could not be established (no outputPath, or the
     Downloads directory could not be listed). Only import-pending rows are
-    judged on it; None concludes nothing.
+    judged on it; None concludes nothing, and an absence message on such a
+    row is then no evidence either.
 
     Returns one of:
       'keep'                   -> leave it alone (still working, or transient)
@@ -115,6 +124,8 @@ def classify_item(item, now, download_present=None):
     texts = list(item_texts(item))
     local_problem = any(kw in t for t in texts for kw in LOCAL_RECOVERABLE_KEYWORDS)
     bad_release = any(kw in t for t in texts for kw in BAD_RELEASE_KEYWORDS)
+    bad_content = any(kw in t for t in texts
+                      for kw in BAD_RELEASE_KEYWORDS if kw not in ABSENCE_KEYWORDS)
     status = item.get('status')
     tracked_status = item.get('trackedDownloadStatus')
     tracked_state = item.get('trackedDownloadState')
@@ -136,9 +147,17 @@ def classify_item(item, now, download_present=None):
         #    gets it imported.
         if local_problem:
             return 'try_import_recoverable'
-        # c) The content itself cannot be imported: remove and blocklist.
-        if bad_release:
+        # c) The content itself cannot be imported: remove and blocklist. An
+        #    absence message counts only while the download is known to be on
+        #    disk (then the files there are unimportable). With presence
+        #    unknown — the media disk missing makes the library look empty
+        #    and the output path absent — the row is kept: removing and
+        #    blocklisting it would be harsher than the files-gone removal
+        #    that rule a) withheld.
+        if bad_content or (bad_release and download_present is True):
             return 'remove_blocklist'
+        if bad_release:
+            return 'keep'
         # d) The release is on disk and healthy. Import it rather than throwing
         #    it away — deleting here is what created the grab/delete/re-grab
         #    loop. Only give up once it has resisted for STUCK_MAX_AGE_HOURS,

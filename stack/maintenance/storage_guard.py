@@ -14,8 +14,11 @@ the Downloads directory rdtclient and prowlarr bind. The root folders exist,
 so they report accessible, and the guard passes. Files-gone, the rule that
 removes a row because its download is absent from Downloads, would then
 read every download as gone, so library_doubt() withholds it while no
-library directory holds anything. The other rules still act on the apps'
-own messages, which a missing disk makes unreliable too.
+library directory holds anything. With presence unknown, an import-pending
+row's absence message ("No files found are eligible for import") is no
+evidence either and the row is kept (queue_policy.classify_item); the other
+rules still act on the apps' own messages, which a missing disk makes
+unreliable too.
 """
 import os
 
