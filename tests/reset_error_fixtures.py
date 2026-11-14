@@ -71,13 +71,17 @@ IMPORT_PENDING = {
     "outputPath": f"/data/Downloads/radarr/{PENDING}",
     "size": 8_000_000_000, "sizeleft": 0,
 }
-# A Radarr row whose import is pending and whose download is not on disk.
+# A Radarr row whose import is pending and whose download is not on disk,
+# with the message Radarr and Sonarr actually send for it: an output path
+# that holds nothing, or does not exist, gives an empty import result
+# (DownloadedMovieImportService / DownloadedEpisodesImportService.ProcessPath)
+# and CompletedDownloadService warns with this text.
 IMPORT_VANISHED = {
     "id": 104, "movieId": 814, "title": VANISHED,
     "status": "completed", "trackedDownloadStatus": "warning",
     "trackedDownloadState": "importPending",
     "statusMessages": [{"title": VANISHED, "messages": [
-        "One or more movies expected in this release were not imported or missing"]}],
+        f"No files found are eligible for import in /data/Downloads/radarr/{VANISHED}"]}],
     "downloadId": "D4E5F60718293A4B5C6D7E8F901234567890ABCD",
     "protocol": "torrent", "downloadClient": "RDTClient", "indexer": "YggTorrent",
     "outputPath": f"/data/Downloads/radarr/{VANISHED}",

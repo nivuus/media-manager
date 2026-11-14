@@ -174,9 +174,11 @@ TABLE = [
     ("sample undetermined",
      row(status="completed", tracked_state="importBlocked",
          messages=[SAMPLE_UNKNOWN], added=ago(10)), "try_import"),
+    # Presence unknown (the default): an absence message proves nothing
+    # either, so the row is kept, never removed or blocklisted.
     ("no files found, import pending",
      row(status="completed", tracked_state="importPending",
-         messages=[NO_FILES], added=ago(1)), "remove_blocklist"),
+         messages=[NO_FILES], added=ago(1)), "keep"),
 ]
 
 for label, record, want in TABLE:
@@ -245,8 +247,16 @@ PRESENCE_TABLE = [
     ("unknown, permission denied for 100 h",
      row(**IMPORT_PENDING, messages=[PERMISSION], added=ago(100)), None,
      "try_import_recoverable"),
+    # The message Radarr/Sonarr send when the download's path is empty or
+    # missing: with presence unknown (the media disk may be missing), it is
+    # no evidence against the release. Kept: neither removed nor blocklisted.
     ("unknown, 'no files found'",
-     row(**IMPORT_PENDING, messages=[NO_FILES], added=ago(1)), None,
+     row(**IMPORT_PENDING, messages=[NO_FILES], added=ago(1)), None, "keep"),
+    ("unknown, 'no files found', import blocked",
+     row(**IMPORT_BLOCKED, messages=[NO_FILES], added=ago(10)), None, "keep"),
+    # A message about the content itself still condemns the release.
+    ("unknown, unpacking failed",
+     row(**IMPORT_PENDING, error="Unpacking failed", added=ago(1)), None,
      "remove_blocklist"),
 
     # Only an import-pending row is judged on presence: a download that has

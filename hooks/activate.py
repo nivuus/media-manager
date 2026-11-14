@@ -148,10 +148,14 @@ def fill_env(text, keys):
 def arm(root, unit, wants):
     """Lier une unite dans son repertoire .wants. Idempotent.
 
-    Leve FileNotFoundError si l'unite est absente : un lien pendant est pire
-    que pas de lien, parce qu'il se lit comme « armee ».
+    Returns False, arming nothing, when the unit is a symlink: an operator's
+    mask, which install.py leaves in place and this phase respects. Raises
+    FileNotFoundError when the unit is missing — a dangling link is worse
+    than none, because it reads as armed.
     """
     unit_path = os.path.join(root, UNIT_DIR, unit)
+    if os.path.islink(unit_path):
+        return False
     if not os.path.isfile(unit_path):
         raise FileNotFoundError(unit_path)
 
@@ -165,6 +169,7 @@ def arm(root, unit, wants):
     if os.path.lexists(link):
         os.remove(link)      # un fichier ordinaire ici est le bug, pas un etat
     os.symlink(target, link)
+    return True
 
 
 class ActivationError(RuntimeError):
@@ -323,9 +328,19 @@ def run_phase(root):
         return 1
 
     emit({"event": "progress", "pct": 85, "msg": "Armement des timers"})
-    for timer in TIMERS:
-        arm(root, timer, "timers.target.wants")
-    failed = start_units(TIMERS)
+    armed = []
+    try:
+        for timer in TIMERS:
+            if arm(root, timer, "timers.target.wants"):
+                armed.append(timer)
+            else:
+                emit({"event": "progress", "pct": 85,
+                      "msg": f"{timer}: masked by the operator (a symlink),"
+                             " left alone: neither armed nor started"})
+    except FileNotFoundError as exc:
+        print(f"media-manager activate: unit to arm is missing: {exc}", file=sys.stderr)
+        return 1
+    failed = start_units(armed)
     if failed:
         emit({"event": "progress", "pct": 95,
               "msg": "Timers lies mais non demarres, actifs au prochain "

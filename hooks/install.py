@@ -13,8 +13,10 @@ TROIS REGLES PORTENT LE RESTE.
    reecrirait detruirait tout cela sans bruit — et cette phase tourne aussi
    sur une machine deja installee (la bascule de production passe par
    `install.py --root /`). Les cles absentes sont AJOUTEES, les presentes ne
-   sont pas touchees. One exception (add_profiles): a profile the
-   answers turn on is added to COMPOSE_PROFILES, never removed.
+   sont pas touchees. Two exceptions: a profile the answers turn on is
+   added to COMPOSE_PROFILES, never removed (add_profiles); turning
+   translation on fills its endpoint, model and key where they are empty,
+   never where they are set (fill_empty_values).
 
 2. LES GID SONT LUS SUR LA CIBLE. group_add supposait video=44 et render=105.
    video=44 est stable sur Debian, render ne l'est pas (104, 105 ou 106 selon
@@ -42,7 +44,6 @@ TROIS REGLES PORTENT LE RESTE.
 import argparse
 import json
 import os
-import shutil
 import sys
 
 from atomic_env import write_env
@@ -50,34 +51,19 @@ from data_dirs import ensure_data_dirs
 from retired import retire_stack_files, retire_units
 from safe_copy import copy_stack
 from subtitles import PROFILE as SUBTITLE_PROFILE, translation_env
+from units import (FAILURE_DROPIN_NAME, UNIT_REL_DIR, UNITS, _is_our_dropin,
+                   place_unit, sync_failure_dropins)
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STACK = os.path.join(HERE, "stack")
-UNITS_SRC = os.path.join(HERE, "systemd")
 
 DEST_REL = "opt/nivuus/media-manager"
-UNIT_REL_DIR = "etc/systemd/system"
 
 # The identity the stack's services run as; rendered into the .env and used
 # to own the data directories of services that do not run as root.
 PUID = 1000
 PGID = 1000
 TEMPLATE_NAME = "env.template"
-
-UNITS = [
-    "media-manager-reset-error.service", "media-manager-reset-error.timer",
-    "media-manager-update-wanted.service", "media-manager-update-wanted.timer",
-]
-
-# systemd-failure-notify@.service belongs to the host, not to this package
-# (see CLAUDE.md): it is what actually sends an alert on a failed run, but
-# this package must never declare a hard dependency on a unit it does not
-# ship. A drop-in wires each maintenance service to it, ONLY when the host
-# has it — a reinstall must not resurrect a dangling OnFailure= after an
-# operator removes that host unit.
-FAILURE_NOTIFY_UNIT = "systemd-failure-notify@.service"
-FAILURE_DROPIN_NAME = "10-on-failure.conf"
-FAILURE_DROPIN_CONTENT = "[Unit]\nOnFailure=systemd-failure-notify@%n.service\n"
 
 # Valeurs Debian par defaut, utilisees seulement si /etc/group est illisible.
 DEFAULT_GIDS = {"video": 44, "render": 105}
@@ -184,6 +170,36 @@ def add_profiles(text, wanted):
     return "".join(lines)
 
 
+def fill_empty_values(text, values):
+    """The .env with each key of `values` filled where its value is EMPTY.
+
+    The second exception to rule 1, for values a fresh install renders empty
+    on purpose: the translation endpoint, model and key are always rendered
+    since 1.4.0, empty while translation is off, so merge_env() alone left
+    them empty when it was turned on later. Only the last assignment counts
+    (it is the one compose reads); a non-empty value, or an empty answer,
+    changes nothing. Quoting and every other line are kept.
+    """
+    lines = text.splitlines(keepends=True)
+    last = {}
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            last[stripped.partition("=")[0].strip()] = i
+    for key, wanted in values.items():
+        if not wanted or key not in last:
+            continue
+        index = last[key]
+        name, _, value = lines[index].rstrip("\n").partition("=")
+        value = value.strip()
+        quote = value[0] if len(value) == 2 and value[0] == value[1] and value[0] in "'\"" else ""
+        if value and not quote:
+            continue
+        newline = "\n" if lines[index].endswith("\n") else ""
+        lines[index] = f"{name}={quote}{wanted}{quote}{newline}"
+    return "".join(lines)
+
+
 def env_identity(text):
     """(uid, gid) that compose will run non-root services as, from a .env text.
 
@@ -218,59 +234,6 @@ def render_env(values):
     return text
 
 
-def place_unit(name, dest_dir):
-    os.makedirs(dest_dir, exist_ok=True)
-    dest = os.path.join(dest_dir, name)
-    shutil.copyfile(os.path.join(UNITS_SRC, name), dest)
-    # 0644 : une unite systemd est une donnee, pas un programme.
-    os.chmod(dest, 0o644)
-
-
-def _is_our_dropin(path):
-    """True only for the exact file this hook itself would have written.
-
-    Never a symlink (it could point anywhere, and removing it would not be
-    "removing our content" but removing whatever name an operator or another
-    tool chose to put there) and never a directory (os.path.isfile is False
-    for one, so this returns False instead of letting a later open() crash
-    the hook). Any other content at the path — an operator's drop-in for a
-    different notifier, most likely — is left alone: this is provenance, not
-    "the path is ours because we chose the name."
-
-    Read and compared as bytes, never as decoded text: a text-mode open()
-    uses universal newlines, which would silently turn a CRLF copy of our
-    content into a match (and get it deleted), and raises UnicodeDecodeError
-    — uncaught here, since sync_failure_dropins runs after this hook's own
-    try/except block — on the first non-UTF-8 byte in an unrelated file.
-    """
-    if os.path.islink(path) or not os.path.isfile(path):
-        return False
-    try:
-        with open(path, "rb") as fh:
-            return fh.read() == FAILURE_DROPIN_CONTENT.encode()
-    except OSError:
-        return False
-
-
-def sync_failure_dropins(root):
-    """Write or drop the OnFailure= alert drop-in for each maintenance service.
-
-    Only the .service units get one — never the .timer units, which never
-    fail themselves. When the host has no systemd-failure-notify@, a
-    drop-in a previous install left behind is removed — but only when it is
-    still exactly that (see _is_our_dropin); nothing else at that path, and
-    nothing else in that directory, is ever touched.
-    """
-    unit_dir = os.path.join(root, UNIT_REL_DIR)
-    notify_present = os.path.isfile(os.path.join(unit_dir, FAILURE_NOTIFY_UNIT))
-    for unit in (u for u in UNITS if u.endswith(".service")):
-        dropin = os.path.join(unit_dir, f"{unit}.d", FAILURE_DROPIN_NAME)
-        if notify_present:
-            os.makedirs(os.path.dirname(dropin), exist_ok=True)
-            with open(dropin, "w") as fh:
-                fh.write(FAILURE_DROPIN_CONTENT)
-        elif _is_our_dropin(dropin):
-            os.remove(dropin)
 
 
 def install(root, answers):
@@ -346,6 +309,10 @@ def install(root, answers):
     if os.path.isfile(env_path):
         with open(env_path) as fh:
             rendered = add_profiles(merge_env(fh.read(), rendered), profiles)
+        if subtitle_translation:
+            rendered = fill_empty_values(rendered, {key: subtitle_env[key] for key in (
+                "SUBTITLE_TRANSLATION_ENDPOINT", "SUBTITLE_TRANSLATION_MODEL",
+                "SUBTITLE_TRANSLATION_API_KEY")})
         emit({"event": "progress", "pct": 70,
               "msg": ".env existant conserve, variables manquantes ajoutees"})
     # Docker would create these as root, unwritable by a non-root service.
@@ -365,8 +332,13 @@ def install(root, answers):
     emit({"event": "progress", "pct": 85, "msg": "Unites de maintenance posees"})
     unit_dir = os.path.join(root, UNIT_REL_DIR)
     for unit in UNITS:
-        place_unit(unit, unit_dir)
-    sync_failure_dropins(root)
+        if not place_unit(unit, unit_dir):
+            emit({"event": "progress", "pct": 85,
+                  "msg": f"{os.path.join(unit_dir, unit)}: masked by the operator"
+                         " (a symlink), left alone"})
+    for path in sync_failure_dropins(root):
+        emit({"event": "progress", "pct": 85,
+              "msg": f"{path}: a symlink, left alone"})
     for path in (retire_units(unit_dir, FAILURE_DROPIN_NAME, _is_our_dropin)
                  + retire_stack_files(dest)):
         emit({"event": "progress", "pct": 90, "msg": f"Retired: {path}"})

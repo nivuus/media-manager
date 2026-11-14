@@ -14,6 +14,11 @@ MAX_FILE_AGE_HOURS = 24
 # Category subdirectories Radarr and Sonarr have the download client file
 # their downloads under; the purge recreates them if it emptied them.
 REQUIRED_SUBDIRS = ['tv-sonarr', 'radarr']
+# Opening (dir_fd, name) with these flags refuses a symlink (ELOOP) and
+# anything that is not a directory (ENOTDIR): no path is resolved again
+# after the kernel has decided. Same rule as hooks/safe_copy.py, which is
+# not deployed with stack/, hence this small copy.
+SAFE_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 def entry_name(path):
@@ -141,11 +146,43 @@ def purge(downloads_dir, protected, owner, failures, batch):
                         f'Downloads purge: cannot remove the empty directory {dir_path}',
                         error)
 
-    # Recreate the category subdirectories Sonarr/Radarr expect.
-    for subdir in REQUIRED_SUBDIRS:
-        subdir_path = os.path.join(downloads_dir, subdir)
-        try:
-            os.makedirs(subdir_path, exist_ok=True)
-            os.chown(subdir_path, *owner)
-        except OSError as error:
-            failures.record(f'Downloads purge: cannot restore {subdir_path}', error)
+    restore_categories(downloads_dir, owner, failures)
+
+
+def restore_categories(downloads_dir, owner, failures):
+    """Recreate the category subdirectories Sonarr/Radarr expect, owned by `owner`.
+
+    This runs as root inside a directory the download clients write, so no
+    category is ever acted on by path: each one is created relative to a
+    descriptor of Downloads, opened with O_NOFOLLOW | O_DIRECTORY, and
+    chowned through that descriptor. An entry that is a symlink or not a
+    directory is left as it is and recorded as a failure.
+    """
+    try:
+        root_fd = os.open(downloads_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError as error:
+        failures.record(f'Downloads purge: cannot open {downloads_dir}', error)
+        return
+    try:
+        for subdir in REQUIRED_SUBDIRS:
+            subdir_path = os.path.join(downloads_dir, subdir)
+            try:
+                _restore_category(root_fd, subdir, owner)
+            except OSError as error:
+                if error.errno in (errno.ELOOP, errno.ENOTDIR):
+                    error = f'not a real directory (a symlink or a file), left alone: {error}'
+                failures.record(f'Downloads purge: cannot restore {subdir_path}', error)
+    finally:
+        os.close(root_fd)
+
+
+def _restore_category(root_fd, name, owner):
+    try:
+        os.mkdir(name, dir_fd=root_fd)
+    except FileExistsError:
+        pass  # whatever is there is checked by the open below
+    fd = os.open(name, SAFE_DIR_FLAGS, dir_fd=root_fd)
+    try:
+        os.fchown(fd, *owner)
+    finally:
+        os.close(fd)

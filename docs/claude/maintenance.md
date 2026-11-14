@@ -74,3 +74,14 @@ read, that is a failure and nothing is searched blind.
 
 `reset-error` can now wait up to 120 s + 300 s per instance with pending rows,
 well inside the unit's `TimeoutStartSec=3600`.
+
+## Units: a mask wins over the package
+
+The install hook writes the four maintenance units and their `OnFailure=`
+drop-ins through a temp file and a rename, mode 0644, never by path. A unit
+the operator masked (a symlink, normally to `/dev/null`) is left alone and
+reported ("masked by the operator (a symlink), left alone"); the same goes
+for a symlink in place of a drop-in or its `.d` directory. The activate
+hook then neither arms nor starts a masked timer, and says so. To hand a
+unit back to the package, remove the mask (`systemctl unmask <unit>`) and
+reinstall.
