@@ -40,15 +40,17 @@ TROIS REGLES PORTENT LE RESTE.
    symlinked destination component) lives in safe_copy.py, next to it.
 """
 import argparse
+import errno
 import json
 import os
-import shutil
+import stat
 import sys
 
 from atomic_env import write_env
 from data_dirs import ensure_data_dirs
 from retired import retire_stack_files, retire_units
-from safe_copy import copy_stack
+from safe_copy import (DEST_ROOT_FLAGS, DIR_FLAGS, DIR_MODE, copy_stack,
+                       replace_file_at)
 from subtitles import PROFILE as SUBTITLE_PROFILE, translation_env
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -218,12 +220,39 @@ def render_env(values):
     return text
 
 
+# A unit or a drop-in is data, not a program.
+UNIT_MODE = 0o644
+
+
+def _place_file(dir_fd, name, data):
+    """Write (dir_fd, name) unless it is a symlink; return whether it was written.
+
+    A symlink at a unit's name is an operator's mask (to /dev/null: the only
+    form a mask takes in /etc/systemd/system), and a mask wins over the
+    package. Writing by path would follow it: the content would land in the
+    link's target and that target would become 0644 — for /dev/null, every
+    non-root process on the host would lose it. Anything else is replaced
+    through a temp file, never written through.
+    """
+    try:
+        if stat.S_ISLNK(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode):
+            return False
+    except FileNotFoundError:
+        pass
+    replace_file_at(dir_fd, name, data, UNIT_MODE)
+    return True
+
+
 def place_unit(name, dest_dir):
+    """Place one shipped unit in dest_dir; False when an operator's mask is kept."""
     os.makedirs(dest_dir, exist_ok=True)
-    dest = os.path.join(dest_dir, name)
-    shutil.copyfile(os.path.join(UNITS_SRC, name), dest)
-    # 0644 : une unite systemd est une donnee, pas un programme.
-    os.chmod(dest, 0o644)
+    with open(os.path.join(UNITS_SRC, name), "rb") as fh:
+        data = fh.read()
+    dir_fd = os.open(dest_dir, DEST_ROOT_FLAGS)
+    try:
+        return _place_file(dir_fd, name, data)
+    finally:
+        os.close(dir_fd)
 
 
 def _is_our_dropin(path):
@@ -259,18 +288,45 @@ def sync_failure_dropins(root):
     fail themselves. When the host has no systemd-failure-notify@, a
     drop-in a previous install left behind is removed — but only when it is
     still exactly that (see _is_our_dropin); nothing else at that path, and
-    nothing else in that directory, is ever touched.
+    nothing else in that directory, is ever touched. A symlink in place of
+    the drop-in or of its .d directory is the operator's and is left alone,
+    like a masked unit (see _place_file). Returns the paths left alone.
     """
     unit_dir = os.path.join(root, UNIT_REL_DIR)
     notify_present = os.path.isfile(os.path.join(unit_dir, FAILURE_NOTIFY_UNIT))
+    kept = []
     for unit in (u for u in UNITS if u.endswith(".service")):
         dropin = os.path.join(unit_dir, f"{unit}.d", FAILURE_DROPIN_NAME)
         if notify_present:
-            os.makedirs(os.path.dirname(dropin), exist_ok=True)
-            with open(dropin, "w") as fh:
-                fh.write(FAILURE_DROPIN_CONTENT)
+            if not _write_dropin(unit_dir, f"{unit}.d"):
+                kept.append(dropin)
         elif _is_our_dropin(dropin):
             os.remove(dropin)
+    return kept
+
+
+def _write_dropin(unit_dir, dropin_dir):
+    """Write our drop-in under unit_dir/dropin_dir; False when a symlink is kept."""
+    os.makedirs(unit_dir, exist_ok=True)
+    root_fd = os.open(unit_dir, DEST_ROOT_FLAGS)
+    try:
+        try:
+            os.mkdir(dropin_dir, DIR_MODE, dir_fd=root_fd)
+        except FileExistsError:
+            pass
+        try:
+            dir_fd = os.open(dropin_dir, DIR_FLAGS, dir_fd=root_fd)
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR) and os.path.islink(
+                    os.path.join(unit_dir, dropin_dir)):
+                return False
+            raise
+    finally:
+        os.close(root_fd)
+    try:
+        return _place_file(dir_fd, FAILURE_DROPIN_NAME, FAILURE_DROPIN_CONTENT.encode())
+    finally:
+        os.close(dir_fd)
 
 
 def install(root, answers):
@@ -365,8 +421,13 @@ def install(root, answers):
     emit({"event": "progress", "pct": 85, "msg": "Unites de maintenance posees"})
     unit_dir = os.path.join(root, UNIT_REL_DIR)
     for unit in UNITS:
-        place_unit(unit, unit_dir)
-    sync_failure_dropins(root)
+        if not place_unit(unit, unit_dir):
+            emit({"event": "progress", "pct": 85,
+                  "msg": f"{os.path.join(unit_dir, unit)}: masked by the operator"
+                         " (a symlink), left alone"})
+    for path in sync_failure_dropins(root):
+        emit({"event": "progress", "pct": 85,
+              "msg": f"{path}: a symlink, left alone"})
     for path in (retire_units(unit_dir, FAILURE_DROPIN_NAME, _is_our_dropin)
                  + retire_stack_files(dest)):
         emit({"event": "progress", "pct": 90, "msg": f"Retired: {path}"})

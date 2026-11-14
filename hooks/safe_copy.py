@@ -302,6 +302,30 @@ def _create_temp_component(dir_fd, basename):
     raise RuntimeError(f"could not create a temp file for {basename}")
 
 
+def replace_file_at(dir_fd, name, data, mode):
+    """Write `data` to (dir_fd, name) through a temp file, mode set on its fd.
+
+    The same temp-file-plus-replace as _write_file, for content the caller
+    already holds (a unit, a drop-in). os.replace() swaps the directory
+    entry itself, so whatever was at `name` is replaced, never written
+    through: a caller that must respect a symlink there checks first.
+    """
+    tmp_name, fd = _create_temp_component(dir_fd, name)
+    try:
+        with os.fdopen(fd, "wb") as dst:
+            dst.write(data)
+            dst.flush()
+            os.fchmod(dst.fileno(), mode)
+            os.fsync(dst.fileno())
+        os.replace(tmp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except BaseException:
+        try:
+            os.unlink(tmp_name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def _write_file(dest_root, rel, source):
     """Copy `source` to `dest_root/rel`, entirely through directory file
     descriptors: every path component is opened or created and the file
