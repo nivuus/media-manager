@@ -189,7 +189,7 @@ PURGE_IO = [
     ("file quarantine refused", "os.rename", PermissionError(13, "Permission denied")),
     ("empty directory removal refused", "os.rmdir",
      PermissionError(13, "Permission denied")),
-    ("category subdirectory chown refused", "os.chown",
+    ("category subdirectory chown refused", "os.fchown",
      PermissionError(1, "Operation not permitted")),
 ]
 for label, target, error in PURGE_IO:
