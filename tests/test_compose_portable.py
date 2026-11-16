@@ -141,6 +141,15 @@ interpolated = set(re.findall(r"\$\{([A-Z_][A-Z0-9_]*)\}", referenced))
 check("aucune variable interpolee absente du gabarit",
       sorted(interpolated - declared), [])
 
+# A size cap without a file count: json-file keeps rotating files only when
+# max-file is set; max-size alone still bounds each file but states no retention.
+for compose in sorted(STACK.glob("docker-compose*.yml")):
+    for name, service in (yaml.safe_load(compose.read_text()).get("services") or {}).items():
+        options = (service.get("logging") or {}).get("options") or {}
+        if "max-size" in options:
+            check(f"{compose.name}: {name} sets max-file next to max-size",
+                  "max-file" in options, True)
+
 if failures:
     print("\n".join(failures))
     sys.exit(1)

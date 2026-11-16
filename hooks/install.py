@@ -79,9 +79,6 @@ FAILURE_NOTIFY_UNIT = "systemd-failure-notify@.service"
 FAILURE_DROPIN_NAME = "10-on-failure.conf"
 FAILURE_DROPIN_CONTENT = "[Unit]\nOnFailure=systemd-failure-notify@%n.service\n"
 
-# Valeurs Debian par defaut, utilisees seulement si /etc/group est illisible.
-DEFAULT_GIDS = {"video": 44, "render": 105}
-
 # Le repertoire de peripheriques de rendu, sur la machine vivante (regle 3).
 RENDER_NODES = "/dev/dri"
 
@@ -91,17 +88,26 @@ def emit(event):
 
 
 def group_gid(root, name):
-    """GID d'un groupe dans le /etc/group de la cible, sinon la valeur Debian."""
+    """GID of a group in the TARGET's /etc/group; an error when it cannot be read.
+
+    The GIDs end up in the .env that gives the containers access to the render
+    nodes: a guessed value would hand that access to the wrong group (or to
+    none) with no message, so an unreadable file, a missing group or a
+    malformed entry stops the install and names what is wrong.
+    """
     path = os.path.join(root, "etc/group")
-    try:
-        with open(path) as fh:
-            for line in fh:
-                fields = line.split(":")
-                if len(fields) > 2 and fields[0] == name:
-                    return int(fields[2])
-    except (OSError, ValueError):
-        pass
-    return DEFAULT_GIDS[name]
+    with open(path) as fh:
+        for line in fh:
+            fields = line.rstrip("\n").split(":")
+            if fields[0] != name:
+                continue
+            try:
+                return int(fields[2])
+            except (IndexError, ValueError):
+                raise ValueError(
+                    f"malformed entry for group {name!r} in {path}: "
+                    f"{line.strip()!r}") from None
+    raise ValueError(f"group {name!r} not found in {path}")
 
 
 def bool_answer(answers, key):
@@ -296,6 +302,11 @@ def install(root, answers):
         text_answer(answers, "subtitle_source_languages", "en"),
         text_answer(answers, "subtitle_target_languages", "fr"))
 
+    # Resolved before anything is deployed: a target whose groups cannot be
+    # read fails the install without leaving a half-installed stack behind.
+    video_gid = group_gid(root, "video")
+    render_gid = group_gid(root, "render")
+
     dest = os.path.join(root, DEST_REL)
 
     emit({"event": "progress", "pct": 20, "msg": "Depose de la pile"})
@@ -336,8 +347,8 @@ def install(root, answers):
         "TRANSCODE_DIR": transcode,
         "COMPOSE_FILE": compose_files,
         "COMPOSE_PROFILES": ",".join(profiles),
-        "VIDEO_GID": str(group_gid(root, "video")),
-        "RENDER_GID": str(group_gid(root, "render")),
+        "VIDEO_GID": str(video_gid),
+        "RENDER_GID": str(render_gid),
         "PLEX_CLAIM": plex_claim,
         **subtitle_env,
     })

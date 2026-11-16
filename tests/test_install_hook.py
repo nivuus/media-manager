@@ -203,13 +203,28 @@ with tempfile.TemporaryDirectory() as root:
     check("aucun artefact laisse",
           (pathlib.Path(root) / DEST_REL).exists(), False)
 
-# --- Sans /etc/group sur la cible, les valeurs Debian par defaut ----------
-with tempfile.TemporaryDirectory() as root:
-    proc = run(root, ANSWERS)
-    check("code de sortie (pas de /etc/group)", proc.returncode, 0)
-    values = env_values(pathlib.Path(root) / DEST_REL / ".env")
-    check("VIDEO_GID par defaut", values["VIDEO_GID"], "44")
-    check("RENDER_GID par defaut", values["RENDER_GID"], "105")
+# --- A target whose groups cannot be resolved fails loudly ----------------
+# A guessed GID would silently grant the wrong group (or none) access to the
+# render nodes: the install must stop, name the group and the file, and leave
+# nothing behind.
+def check_group_failure(label, group_text, want_in_stderr):
+    with tempfile.TemporaryDirectory() as root:
+        if group_text is not None:
+            path = pathlib.Path(root) / "etc" / "group"
+            path.parent.mkdir(parents=True)
+            path.write_text(group_text)
+        proc = run(root, ANSWERS)
+        check(f"{label}: exit code", proc.returncode, 1)
+        check(f"{label}: cause named", want_in_stderr in proc.stderr, True)
+        check(f"{label}: nothing deployed",
+              (pathlib.Path(root) / DEST_REL).exists(), False)
+
+
+check_group_failure("no /etc/group", None, "etc/group")
+check_group_failure("group absent from the file",
+                    "root:x:0:\nvideo:x:44:\n", "'render'")
+check_group_failure("malformed GID",
+                    "root:x:0:\nvideo:x:44:\nrender:x:abc:\n", "'render'")
 
 # --- OnFailure= drop-in: only when the host has systemd-failure-notify@ ----
 # The deployed media-manager-*.service units carried a hand-added
