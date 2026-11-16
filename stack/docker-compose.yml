@@ -32,6 +32,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
     ports:
       - 6500:6500
     restart: unless-stopped
@@ -66,6 +67,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   radarr:
     image: linuxserver/radarr:latest
@@ -98,6 +100,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   sonarr:
     image: linuxserver/sonarr:latest
@@ -126,6 +129,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   prowlarr:
     image: linuxserver/prowlarr:latest
@@ -152,6 +156,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   bazarr:
     image: linuxserver/bazarr:latest
@@ -176,6 +181,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   flaresolverr:
     image: alexfozor/flaresolverr:pr-1300-experimental
@@ -191,6 +197,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   seerr:
     image: ghcr.io/seerr-team/seerr:latest
@@ -218,6 +225,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   # Rule-based media cleanup (it replaced media_cleanup.py). Its rules live in
   # its own database under ./maintainerr; see CLAUDE.md, "Disk Cleanup".
@@ -256,6 +264,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   tdarr:
     image: ghcr.io/haveagitgat/tdarr:latest
@@ -298,6 +307,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   tdarr-node:
     image: ghcr.io/haveagitgat/tdarr_node:latest
@@ -345,6 +355,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   # Node NVENC : encode sur la RTX 4070, en parallèle du node QSV (iGPU) qui reste
   # réservé à Plex. La carte est rendue à la VM Windows par les hooks libvirt
@@ -402,6 +413,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   tautulli:
     image: linuxserver/tautulli:latest
@@ -420,6 +432,7 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
 
   plex:
     image: linuxserver/plex:latest
@@ -447,3 +460,4 @@ services:
       driver: json-file
       options:
         max-size: 10m
+        max-file: "3"
