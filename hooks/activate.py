@@ -44,6 +44,11 @@ docker command does not exist at all.
    Tautulli and Seerr keep theirs elsewhere and stay to be filled in by
    hand.
 
+2b. THE RECYCLE BIN of Radarr and Sonarr (hooks/recycle_bin.py): its
+   directories under MEDIA_ROOT, then the setting, only while it is empty.
+   Here and not in install: the media disk is a runtime path, outside the
+   --root install writes under, and the setting needs the services up.
+
 3. ARMER LES TIMERS. Par SYMLINK, jamais par `systemctl enable` : systemctl
    echoue silencieusement en environnement contraint — une sous-commande de
    consultation n'affiche simplement rien — donc un enable qui « a rendu » ne
@@ -67,7 +72,9 @@ import time
 import xml.etree.ElementTree as ET
 
 import lingarr_setup
+import recycle_bin
 from atomic_env import write_env
+from install import env_identity
 
 DEPLOY = "/opt/nivuus/media-manager"
 UNIT_DIR = "etc/systemd/system"
@@ -259,6 +266,20 @@ def start_units(units):
     return failed
 
 
+def configure_recycle_bin(env_text):
+    """Radarr's and Sonarr's recycle bin: its directories, then the setting.
+
+    Keys come from the effective .env, not from this run's harvest: a key
+    already in the .env is never harvested again (see fill_env).
+    """
+    uid, gid = env_identity(env_text)
+    recycle_bin.ensure_dirs(recycle_bin.media_root(env_text), uid, gid)
+    keys = {variable: recycle_bin.env_value(env_text, variable)
+            for _, variable in recycle_bin.APPS.values()}
+    for msg in recycle_bin.configure(keys):
+        emit({"event": "progress", "pct": 82, "msg": msg})
+
+
 def run_phase(root):
     """The activate phase's body: start the stack, harvest keys, arm timers.
 
@@ -318,7 +339,9 @@ def run_phase(root):
         if LINGARR in declared:
             for msg in lingarr_setup.configure():
                 emit({"event": "progress", "pct": 80, "msg": msg})
-    except (ActivationError, lingarr_setup.LingarrSetupError) as exc:
+        configure_recycle_bin(filled)
+    except (ActivationError, lingarr_setup.LingarrSetupError,
+            recycle_bin.RecycleBinError, ValueError, OSError) as exc:
         print(f"media-manager activate: {exc}", file=sys.stderr)
         return 1
 

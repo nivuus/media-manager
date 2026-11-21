@@ -53,6 +53,8 @@ avait posé (`hooks/retired.py`). Tests : `make test`.
   what Recyclarr manages, how to change it, why `./recyclarr` belongs to PUID.
 - [`maintenance.md`](docs/claude/maintenance.md) — the safeguards ported from
   Cleanuparr (quarantine, import guard, replacement search, queue threshold).
+- [`recycle-bin.md`](docs/claude/recycle-bin.md) — Radarr/Sonarr recycle bin
+  set by the activate hook, how to restore, why cleanup stays under 14 days.
 - [`lingarr.md`](docs/claude/lingarr.md) — optional subtitle translation with
   a local LLM: wiring, the anonymous-onboarding hole, the firewall
   prerequisite, turning it on for an existing install.

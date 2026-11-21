@@ -48,6 +48,7 @@ NON_ROOT_DATA_DIRS = {
 
 
 def _ensure_owned_dir(root_fd, dest, name, mode, uid, gid):
+    """Create `name` under root_fd if needed, own it; return its open fd."""
     created = True
     try:
         os.mkdir(name, mode, dir_fd=root_fd)
@@ -74,16 +75,32 @@ def _ensure_owned_dir(root_fd, dest, name, mode, uid, gid):
                 print(f"media-manager install: warning: {os.path.join(dest, name)}"
                       f" is not owned by {uid}:{gid}; ownership is set when"
                       " install runs as root", file=sys.stderr)
-    finally:
+    except BaseException:
         os.close(fd)
+        raise
+    return fd
 
 
 def ensure_data_dirs(dest, uid, gid, dirs=None):
-    """Create each declared directory under dest and give it to uid:gid."""
+    """Create each declared directory under dest and give it to uid:gid.
+
+    A name may hold several components ("a/b"): each one is created, owned
+    and opened from the previous one's fd, never through a path, so a
+    symlink planted at any level is refused, not followed.
+    """
     dirs = NON_ROOT_DATA_DIRS if dirs is None else dirs
     root_fd = os.open(dest, DEST_ROOT_FLAGS)
     try:
         for name, mode in dirs.items():
-            _ensure_owned_dir(root_fd, dest, name, mode, uid, gid)
+            parent_fd, shown = root_fd, dest
+            try:
+                for part in name.split("/"):
+                    fd = _ensure_owned_dir(parent_fd, shown, part, mode, uid, gid)
+                    if parent_fd != root_fd:
+                        os.close(parent_fd)
+                    parent_fd, shown = fd, os.path.join(shown, part)
+            finally:
+                if parent_fd != root_fd:
+                    os.close(parent_fd)
     finally:
         os.close(root_fd)

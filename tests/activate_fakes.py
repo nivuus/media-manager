@@ -5,7 +5,10 @@ FakeApi dispatches on (method, url) in maintenance_fakes.py, and fails the
 test loudly on any call it was not told to expect. activate.DEPLOY is
 patched to a scratch directory for EVERY case: make test runs as root,
 DEPLOY is hardcoded to the real /opt/nivuus/media-manager, and nothing here
-may ever touch it.
+may ever touch it. For the same reason activate.configure_recycle_bin is
+replaced in every case (by a no-op, or the `recycle` spy a case passes): the
+real one creates directories under MEDIA_ROOT and calls Radarr/Sonarr on
+the loopback, which on the reference host are the production ones.
 """
 import io
 import pathlib
@@ -50,7 +53,8 @@ def timer_routes():
 
 
 def phase_runner(activate, repo):
-    """run_phase_with(routes, deploy_files=None, inspect=None, calls=None)
+    """run_phase_with(routes, deploy_files=None, inspect=None, calls=None,
+    recycle=None)
     -> (exit code, stderr), for this loaded activate module.
 
     deploy_files pre-populates the scratch DEPLOY directory (relative path
@@ -64,7 +68,8 @@ def phase_runner(activate, repo):
     stdout is captured too (emit() prints progress there) so a failing case
     does not spam the test's own output — only the assertions should.
     """
-    def run_phase_with(routes, deploy_files=None, inspect=None, calls=None):
+    def run_phase_with(routes, deploy_files=None, inspect=None, calls=None,
+                       recycle=None):
         captured_stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as deploy, \
              tempfile.TemporaryDirectory() as root:
@@ -80,7 +85,9 @@ def phase_runner(activate, repo):
             with mock.patch("subprocess.run", new=fake_subprocess(routes, calls)), \
                  mock.patch("sys.stderr", new=captured_stderr), \
                  mock.patch("sys.stdout", new=io.StringIO()), \
-                 mock.patch.object(activate, "DEPLOY", deploy):
+                 mock.patch.object(activate, "DEPLOY", deploy), \
+                 mock.patch.object(activate, "configure_recycle_bin",
+                                   new=recycle or (lambda env_text: None)):
                 code = activate.run_phase(root)
             if inspect is not None:
                 inspect(pathlib.Path(deploy), pathlib.Path(root))
